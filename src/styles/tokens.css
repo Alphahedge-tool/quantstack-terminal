@@ -1,0 +1,354 @@
+/* ═════════════════════════════════════════════════════════════════════════════
+   QUANTSTACK — DESIGN TOKENS
+   ─────────────────────────────────────────────────────────────────────────────
+   Every colour, step and weight in this app resolves to a variable defined here.
+   Components consume ROLES (--surface-panel, --text-secondary) and never a raw
+   hex, so a change here moves the whole product at once.
+
+   Ported from the reference terminal's token ladder. The measurements in the
+   comments are load-bearing — they explain why a stop sits where it does, and
+   re-deriving them by eye is how a ladder drifts flat.
+   ═════════════════════════════════════════════════════════════════════════════ */
+
+:root {
+  color-scheme: dark;
+
+  /* ── Surface ladder ────────────────────────────────────────────────────────
+     Panels separate by LUMINANCE, not by a cold blue cast. The warm bias is
+     deliberate but tiny (R−B of +2 to +6), well under the perceptual threshold
+     on its own.
+
+     Steps are 1.07:1 and 1.10:1 between neighbours. An earlier ladder sat at
+     1.03:1 / 1.05:1, which is invisible: every bar on the page was technically
+     a different colour from the canvas and read as one flat sheet, with only
+     the 1px borders carrying the structure.
+
+     If you change one stop, re-check its neighbours. Below roughly 1.05:1 a
+     boundary stops existing to the eye no matter what the hex says. */
+  --surface-canvas:  #171614;
+  --surface-panel:   #1c1b19;
+  --surface-raised:  #201f1d;
+  --surface-overlay: #22211f;
+  --surface-hover:   #302f2c;
+  --surface-chart:   #1c1b19;
+
+  /* ── Card-on-surface system ───────────────────────────────────────────────
+     The surface BEHIND is the lighter charcoal; the containers on it are
+     deeper, and a gap on every side lets the ground show through.
+
+     A container is DARKER than the surface it sits on, so a drop shadow alone
+     cannot lift it — shadow on a mid-dark ground reads as nothing. Two edges do
+     the work instead: --container-edge is the rim catching light from above,
+     and --container-halo is the occlusion ring painted BEHIND the card, darker
+     than the surface, so the ground looks shaded where the card blocks it.
+
+     Both are keyed to --surface-blue and have to move with it: the edge sits
+     ~18 levels above the ground (--container-border, the inner-card edge, is
+     BELOW it and vanishes if borrowed out here). */
+  --surface-blue:     #302f2d;
+  --container-blue:   #1c1b19;
+  --container-head:   #201f1d;
+  --container-hover:  #302f2c;
+  --container-border: #393836;
+  --container-rule:   #262523;
+  --container-edge:   #55534f;
+  --container-halo:   rgba(0, 0, 0, .5);
+  --container-gap:    10px;
+  --container-radius: 10px;
+
+  /* ── Chrome ───────────────────────────────────────────────────────────────
+     Navigation and toolbars. Luminance-matched to the surface steps they
+     mirror, so the shell's internal hierarchy stays in step with the content
+     ladder without the two being the same variable. */
+  --chrome-canvas:        #171614;
+  --chrome-panel:         #1c1b19;
+  --chrome-raised:        #201f1d;
+  --chrome-overlay:       #22211f;
+  --chrome-hover:         #302f2c;
+  --chrome-border-subtle: #262523;
+  --chrome-border:        #393836;
+  --chrome-border-strong: #55534f;
+
+  /* ── Text ─────────────────────────────────────────────────────────────────
+     Four steps, each a deliberate rung down in emphasis.
+
+     The supporting steps were dimmed one notch (secondary 6.75:1 → 5.68:1,
+     tertiary 3.96:1 → 3.38:1 on --surface-panel) so the primary rung carries
+     more of the page. On a screen that is mostly numbers, hierarchy comes from
+     how far the QUIET text recedes — captions, units and "from 191.00" details
+     were close enough to the values they annotate that the eye had to sort them
+     out rather than skip them.
+
+     Dimmed by lowering luminance ONLY. Each step keeps the ladder's warm
+     signature exactly — R = B+7, G = B+5 — because a step that loses its warmth
+     as it darkens reads as a different, cooler grey rather than as less of the
+     same ink.
+
+     ── The floor, and where it binds ──
+
+     3:1 against the surface the text actually sits on. The binding constraint
+     is not the dark panels, it is --surface-blue (#302f2d), the GROUND the
+     panels sit on: tertiary scores only 3.08:1 there even before this change,
+     and 2.63:1 after. That is survivable solely because tertiary never renders
+     on the ground — the one piece of page-level text outside a panel is
+     PageHeader's subtitle, which is secondary (4.41:1). Put tertiary directly
+     on the ground and it is under the floor, so don't; use secondary there.
+
+     Measured on --surface-panel / --surface-blue:
+       primary   12.91:1 / 10.04:1   unchanged — the values, and never dimmed
+       secondary  5.68:1 /  4.41:1   labels, prose, anything read as a sentence
+       tertiary   3.38:1 /  2.63:1   captions and units — panels only
+       disabled   2.66:1 /  2.07:1   unchanged; this is already the floor, and
+                                     below it the glyph stops resolving at 11px
+
+     One consequence to know about: holding disabled still while tertiary came
+     down narrowed the gap between them from 1.49x to 1.27x, so those two steps
+     no longer separate on colour alone. Anywhere that distinction has to be
+     legible — an off control, a dead option — carry it with opacity or a state
+     style as well, which is what the chart's legend chips already do.
+
+     Re-measure all four if any surface moves. */
+  --text-primary:   #e0dfdc;
+  --text-secondary: #96948f;
+  --text-tertiary:  #706e69;
+  --text-disabled:  #605e59;
+  --text-inverse:   #171614;
+
+  /* ── Borders ──────────────────────────────────────────────────────────────*/
+  --border-subtle: #262523;
+  --border-default: #393836;
+  --border-strong: #55534f;
+  --border-focus:  #4f98a3;
+
+  /* ── Accent & actions ─────────────────────────────────────────────────────*/
+  --accent-info:         #4f98a3;
+  --accent-info-hover:   #69aeba;
+  --accent-info-soft:    rgba(79, 152, 163, .14);
+  --action-primary-bg:   #4f98a3;
+  --action-primary-text: #171614;
+  --action-primary-hover:#69aeba;
+  --link-hover:          #ff5722;
+
+  /* ── Control language ─────────────────────────────────────────────────────
+     One shared vocabulary for every input, select and button, so a form built
+     in one feature matches a form built in another without coordination. */
+  --control-bg:           #201f1d;
+  --control-bg-hover:     #292825;
+  --control-bg-pressed:   #1c1b19;
+  --control-border:       #393836;
+  --control-radius:       6px;
+  --control-shadow:       0 1px 2px rgba(0, 0, 0, .28);
+  --control-shadow-hover: 0 3px 8px rgba(0, 0, 0, .3);
+  --control-comfortable:  42px;
+  --control-compact:      32px;
+  --control-height:       var(--control-comfortable);
+
+  /* ── Status ───────────────────────────────────────────────────────────────
+     `-soft` pairs are the 14%-alpha wash used behind pills and row highlights.
+     Alpha rather than a baked hex so they composite correctly on any rung of
+     the surface ladder. */
+  --status-success:      #7fc45a;
+  --status-success-soft: rgba(127, 196, 90, .14);
+  --status-danger:       #dd6974;
+  --status-danger-soft:  rgba(221, 105, 116, .14);
+  --status-warning:      #fdab43;
+  --status-warning-soft: rgba(253, 171, 67, .14);
+  --status-info:         var(--accent-info);
+  --status-info-soft:    var(--accent-info-soft);
+
+  /* ── Market semantics ─────────────────────────────────────────────────────
+     Up/down are their own names, separate from success/danger. They happen to
+     share hues today; a red-for-up locale changes these two and nothing else. */
+  --market-up:        #7fc45a;
+  --market-up-soft:   rgba(127, 196, 90, .14);
+  --market-down:      #dd6974;
+  --market-down-soft: rgba(221, 105, 116, .14);
+
+  --color-buy:         var(--accent-info);
+  --color-buy-dim:     var(--accent-info-soft);
+  --color-sell:        var(--market-down);
+  --color-sell-dim:    var(--market-down-soft);
+  --color-profit:      var(--market-up);
+  --color-profit-dim:  var(--market-up-soft);
+  --color-loss:        var(--market-down);
+  --color-loss-dim:    var(--market-down-soft);
+  --color-neutral:     var(--status-warning);
+  --color-neutral-dim: var(--status-warning-soft);
+
+  /* ── Series ───────────────────────────────────────────────────────────────
+     Chart lines. Distinct in hue AND in luminance, so they survive being read
+     on a greyscale printout or by a viewer with deuteranopia.
+
+     ── Chroma floor: 0.13 in OKLCH ──
+
+     Two of these sat well under it and read as washed-out beside their
+     neighbours — the eye compares chroma across a plot, so one low-chroma line
+     among saturated ones does not look like a different hue, it looks like the
+     same hue behind a fog:
+
+       --series-sf     #73b4eb  C 0.104  →  #38bdf8  C 0.139
+       --series-theta  #4f98a3  C 0.075  →  split, see below
+
+     Lightness was held while chroma rose (sf stays at L 0.75, the same rung as
+     the green), so the change is saturation only and the luminance ordering
+     that carries these on a greyscale printout is untouched.
+
+     Measured on the #1c1b19 chart surface — contrast / OKLCH L / C / hue:
+       sf         #38bdf8   8.03  0.75  0.139  233
+       iv         #fdab43   9.08  0.80  0.150   69
+       vega       #b78af0   6.48  0.72  0.150  303
+       bid        #7fc45a   8.15  0.75  0.156  136
+       ask        #dd6974   5.20  0.66  0.145   16 */
+  --series-sf:    #38bdf8;
+  --series-iv:    #fdab43;
+  --series-vega:  #b78af0;
+  --series-bid:   var(--status-success);
+  --series-ask:   var(--status-danger);
+  --series-mid:   #fdab43;
+
+  /* Theta's call/put pair. Two tokens rather than one, because the theta pane
+     plots both sides and they have to separate from each other — a single
+     "theta colour" cannot. Blue and yellow rather than the vega pane's
+     green/red so the two panes do not read as the same chart twice.
+
+       theta-call #38bdf8   8.03  0.75  0.139  233
+       theta-put  #ffd43b  12.07  0.88  0.165   92
+
+     Separation under simulated CVD, ΔE: 37.2 deuteranopia, 25.2 tritanopia —
+     comfortably clear of the ~15 needed to stay tellable apart. */
+  --series-theta-call: #38bdf8;
+  --series-theta-put:  #ffd43b;
+
+  /* ── Plotted series ───────────────────────────────────────────────────────
+     The categorical slots for CHART MARKS, as distinct from the --series-*
+     accents above, which are UI colours (chips, legends keys in prose, borders)
+     and are too light to sit as marks on the chart surface.
+
+     These three are the hues above rebuilt in OKLCH at L≈0.60 / C≥0.13 and
+     validated against the #1c1b19 chart surface: inside the dark lightness
+     band, above the chroma floor, worst adjacent CVD separation ΔE 24.8
+     (deuteranopia) and 11.7 (tritanopia), all ≥3:1 contrast on the surface.
+
+     Assigned in fixed order and never cycled. A fourth series is not a
+     generated hue — it folds into "other", or the chart becomes small
+     multiples. Re-run the validator if any of these move. */
+  --chart-1: #0886d3;
+  --chart-2: #b26f00;
+  --chart-3: #9366c9;
+  /* Grid and axes are recessive by construction — they are scaffolding, and at
+     mark contrast they compete with the data they exist to locate. */
+  --chart-grid: var(--border-subtle);
+  --chart-axis: var(--text-disabled);
+
+  /* ── Typography ───────────────────────────────────────────────────────────
+     Two families. Sans carries prose and labels; mono carries every NUMBER, so
+     digits align in a column and a price that changes width does not make the
+     row jitter. */
+  --font-sans: "Inter Variable", Inter, ui-sans-serif, system-ui, "Segoe UI", Arial, sans-serif;
+  --font-mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+
+  /* Size ramp. Six steps is the whole vocabulary — a seventh always turns out
+     to be one of these six plus a weight change. */
+  --type-micro:   11px;
+  --type-caption: 12px;
+  --type-control: 13px;
+  --type-body:    14px;
+  --type-title:   22px;
+  --type-display: 36px;
+
+  /* Weight ramp. Emphasis is carried by WEIGHT and COLOUR before it is carried
+     by size — a heavier label at the same size keeps the vertical rhythm. */
+  --weight-regular:  400;
+  --weight-medium:   500;
+  --weight-semibold: 600;
+  --weight-bold:     700;
+
+  /* Line heights: tight for tabular data where rows must pack, relaxed for
+     prose where they must breathe. */
+  --leading-tight:   1.2;
+  --leading-snug:    1.4;
+  --leading-normal:  1.6;
+
+  /* Tracking. Uppercase micro-labels need positive tracking to stay legible;
+     display sizes need negative tracking to stop looking loose. */
+  --tracking-label:   .5px;
+  --tracking-tight:   -.3px;
+  --tracking-display: -.6px;
+
+  /* ── Spacing ──────────────────────────────────────────────────────────────
+     A 4px base grid. Every gap, pad and inset in the app is one of these.
+     Arbitrary values are how spacing stops being a system. */
+  --space-1:  4px;
+  --space-2:  8px;
+  --space-3:  12px;
+  --space-4:  16px;
+  --space-5:  20px;
+  --space-6:  24px;
+  --space-8:  32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  /* ── Radii ────────────────────────────────────────────────────────────────*/
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 12px;
+
+  /* ── Elevation ────────────────────────────────────────────────────────────
+     Five layers, outward from the card: a lit top rim and shaded bottom rim
+     inside the edge; the halo ring hugging it; then contact, near and far
+     ambient shadow. Every outer layer is spread-corrected to stay inside the
+     10px --container-gap — a wider shadow would just be painted over by the
+     neighbouring container and show only on the grid's outer edges. */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, .28);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, .3);
+  --shadow-lg: 0 10px 28px rgba(0, 0, 0, .38);
+  --shadow-panel: inset 0 1px rgba(255, 255, 255, .025);
+
+  --elevation-container:
+    inset 0 1px 0 rgba(255, 255, 255, .055),
+    inset 0 -1px 0 rgba(0, 0, 0, .35),
+    0 0 0 1px var(--container-halo),
+    0 1px 2px rgba(0, 0, 0, .4),
+    0 4px 8px -2px rgba(0, 0, 0, .38),
+    0 10px 20px -8px rgba(0, 0, 0, .5);
+
+  --elevation-container-hover:
+    inset 0 1px 0 rgba(255, 255, 255, .075),
+    inset 0 -1px 0 rgba(0, 0, 0, .32),
+    0 0 0 1px rgba(0, 0, 0, .5),
+    0 2px 4px rgba(0, 0, 0, .42),
+    0 8px 16px -4px rgba(0, 0, 0, .44),
+    0 16px 28px -12px rgba(0, 0, 0, .55);
+
+  /* The header gradient that reads as light falling on the top of a card. */
+  --elevation-header:
+    linear-gradient(180deg, rgba(255, 255, 255, .028), transparent 72%);
+
+  --elevation-container-transition:
+    border-color 140ms ease, box-shadow 160ms ease, transform 160ms ease;
+
+  /* ── Motion ───────────────────────────────────────────────────────────────
+     Three durations. Fast is for state that must feel instant (hover, press);
+     base for anything the eye should follow; slow only for entrances. */
+  --transition-fast: .1s ease;
+  --transition-base: .17s ease;
+  --transition-slow: .3s ease;
+
+  /* ── Layout ───────────────────────────────────────────────────────────────*/
+  --topbar-height:  48px;
+  --ticker-height:  32px;
+  --sidebar-width:  228px;
+  --sidebar-collapsed: 56px;
+  --statusbar-height: 28px;
+
+  /* ── Stacking ─────────────────────────────────────────────────────────────
+     Named, and few. Every z-index in the app is one of these; a raw number in
+     a component is a bug waiting for a second raw number. */
+  --z-sticky:  20;
+  --z-nav:     100;
+  --z-popover: 400;
+  --z-tooltip: 500;
+  --z-toast:   600;
+}

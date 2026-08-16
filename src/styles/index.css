@@ -1,0 +1,159 @@
+/* ═════════════════════════════════════════════════════════════════════════════
+   ENTRY STYLESHEET
+   Import order matters: Tailwind first, then fonts, then our tokens, then the
+   base layer that consumes them.
+   ═════════════════════════════════════════════════════════════════════════════ */
+
+@import "tailwindcss";
+
+@import "@fontsource-variable/inter/wght.css";
+@import "@fontsource-variable/jetbrains-mono/wght.css";
+
+@import "./tokens.css";
+/* Keep document defaults in Tailwind's base layer. An unlayered reset outranks
+   every generated utility and silently zeros component padding and margins. */
+@import "./base.css" layer(base);
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   TAILWIND THEME BRIDGE
+   Exposes the tokens as Tailwind utilities so a component can write
+   `bg-panel text-secondary` and still be reading the single source of truth in
+   tokens.css. `inline` means the utility emits `var(--surface-panel)` rather
+   than a copied hex — change the token, the utility follows.
+   ───────────────────────────────────────────────────────────────────────────── */
+@theme inline {
+  /* Surfaces */
+  --color-canvas:  var(--surface-canvas);
+  --color-panel:   var(--surface-panel);
+  --color-raised:  var(--surface-raised);
+  --color-overlay: var(--surface-overlay);
+  --color-hover:   var(--surface-hover);
+
+  /* Containers */
+  --color-container:        var(--container-blue);
+  --color-container-head:   var(--container-head);
+  --color-container-hover:  var(--container-hover);
+  --color-container-border: var(--container-border);
+  --color-container-rule:   var(--container-rule);
+  --color-container-edge:   var(--container-edge);
+  --color-ground:           var(--surface-blue);
+
+  /* Chrome */
+  --color-chrome:        var(--chrome-panel);
+  --color-chrome-raised: var(--chrome-raised);
+  --color-chrome-hover:  var(--chrome-hover);
+  --color-chrome-border: var(--chrome-border);
+
+  /* Text */
+  --color-primary:   var(--text-primary);
+  --color-secondary: var(--text-secondary);
+  --color-tertiary:  var(--text-tertiary);
+  --color-disabled:  var(--text-disabled);
+  --color-inverse:   var(--text-inverse);
+
+  /* Lines */
+  --color-line-subtle: var(--border-subtle);
+  --color-line:        var(--border-default);
+  --color-line-strong: var(--border-strong);
+
+  /* Accent + status */
+  --color-accent:       var(--accent-info);
+  --color-accent-hover: var(--accent-info-hover);
+  --color-accent-soft:  var(--accent-info-soft);
+  --color-success:      var(--status-success);
+  --color-success-soft: var(--status-success-soft);
+  --color-danger:       var(--status-danger);
+  --color-danger-soft:  var(--status-danger-soft);
+  --color-warning:      var(--status-warning);
+  --color-warning-soft: var(--status-warning-soft);
+
+  /* Market */
+  --color-up:        var(--market-up);
+  --color-up-soft:   var(--market-up-soft);
+  --color-down:      var(--market-down);
+  --color-down-soft: var(--market-down-soft);
+
+  /* Series */
+  --color-series-sf:    var(--series-sf);
+  --color-series-iv:    var(--series-iv);
+  --color-series-vega:  var(--series-vega);
+  --color-series-theta-call: var(--series-theta-call);
+  --color-series-theta-put:  var(--series-theta-put);
+
+  /* Type */
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+
+  --text-micro:   var(--type-micro);
+  --text-caption: var(--type-caption);
+  --text-control: var(--type-control);
+  --text-body:    var(--type-body);
+  --text-title:   var(--type-title);
+  --text-display: var(--type-display);
+
+  /* Radii */
+  --radius-xs: var(--radius-xs);
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+  --radius-xl: var(--radius-xl);
+
+  /* Elevation */
+  --shadow-sm:        var(--shadow-sm);
+  --shadow-md:        var(--shadow-md);
+  --shadow-lg:        var(--shadow-lg);
+  --shadow-container: var(--elevation-container);
+
+  /* Layout */
+  --spacing-topbar:    var(--topbar-height);
+  --spacing-sidebar:   var(--sidebar-width);
+  --spacing-statusbar: var(--statusbar-height);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   COMPONENT UTILITIES
+   A short list, all structural. Anything visual enough to need variants belongs
+   in a React component instead — that is what components/ui is for.
+   ───────────────────────────────────────────────────────────────────────────── */
+@utility qs-container {
+  background: var(--container-blue);
+  border: 1px solid var(--container-border);
+  border-radius: var(--container-radius);
+  box-shadow: var(--elevation-container);
+  transition: var(--elevation-container-transition);
+}
+
+@utility qs-container-head {
+  background-color: var(--container-head);
+  background-image: var(--elevation-header);
+  border-bottom: 1px solid var(--container-rule);
+}
+
+/* The uppercase micro-label used on every column header, field label and
+   section eyebrow. Positive tracking is what keeps 11px uppercase readable. */
+@utility qs-label {
+  font-size: var(--type-micro);
+  font-weight: var(--weight-semibold);
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+  line-height: var(--leading-tight);
+}
+
+@utility qs-num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--weight-medium);
+}
+
+@utility qs-skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--surface-raised) 25%,
+    var(--surface-hover) 50%,
+    var(--surface-raised) 75%
+  );
+  background-size: 200% 100%;
+  animation: qs-shimmer 1.2s infinite;
+  border-radius: var(--radius-xs);
+}

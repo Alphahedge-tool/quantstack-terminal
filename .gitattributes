@@ -1,0 +1,16 @@
+# Normalise line endings in the repository.
+#
+# The working tree here is Windows and the sources are LF, so without this every
+# file Git touches warns "LF will be replaced by CRLF" — 130 of them on the
+# first add — and the first commit from a Linux machine would then show all 178
+# files as modified with no content change.
+#
+# `text=auto` stores LF in the object database and checks out the platform's
+# native ending, which is the one setting that makes the diff mean something on
+# both sides.
+* text=auto
+
+# Generated. Collapsed in diffs and excluded from the language stats, so a
+# 6,000-line lockfile churn does not bury an actual change in a review.
+package-lock.json -diff linguist-generated=true
+backend/package-lock.json -diff linguist-generated=true

@@ -1,0 +1,152 @@
+/* ═════════════════════════════════════════════════════════════════════════════
+   BASE — reset, document defaults, and the few global behaviours a terminal
+   needs. Everything here reads from tokens.css; no literals below this line.
+   ═════════════════════════════════════════════════════════════════════════════ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  font-size: 100%;
+  -webkit-text-size-adjust: 100%;
+  height: 100%;
+  background: var(--surface-canvas);
+}
+
+body {
+  background-color: var(--surface-canvas);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--type-body);
+  font-weight: var(--weight-regular);
+  line-height: var(--leading-normal);
+  min-width: 320px;
+  min-height: 100dvh;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* A terminal owns its own scroll regions. Letting the document scroll puts a
+     second scrollbar outside the panel that actually holds the overflow. */
+  overflow: hidden;
+}
+
+#root {
+  height: 100dvh;
+  overflow: hidden;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-snug);
+  color: var(--text-primary);
+}
+
+a {
+  color: var(--accent-info);
+  text-decoration: none;
+  cursor: pointer;
+  transition: color var(--transition-fast);
+}
+a:hover { color: var(--link-hover); }
+
+button, input, select, textarea {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+button { background: none; border: none; cursor: pointer; }
+
+/* Numbers are tabular everywhere. Proportional digits make a price column jump
+   sideways on every tick, which reads as noise even when the value is stable. */
+.tabular,
+input[type="number"] {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Scrollbars ─────────────────────────────────────────────────────────────
+   Quiet until approached. A terminal has many scroll regions at once and full
+   -contrast bars turn the layout into a grid of stripes. */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background-color: var(--border-default);
+  border-radius: 99px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover { background-color: var(--border-strong); }
+::-webkit-scrollbar-corner { background: transparent; }
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-default) transparent;
+}
+
+/* ── Focus ──────────────────────────────────────────────────────────────────
+   Keyboard-only. A focus ring on every mouse click is visual noise; no ring at
+   all makes the app unusable without a pointer. */
+:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
+}
+:focus:not(:focus-visible) { outline: none; }
+
+::selection {
+  background: var(--accent-info-soft);
+  color: var(--text-primary);
+}
+
+/* ── Motion ─────────────────────────────────────────────────────────────────
+   Honour the OS setting. Tick-flash animations in particular are exactly the
+   kind of repeated movement this preference exists to suppress. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ── Keyframes ──────────────────────────────────────────────────────────────*/
+@keyframes qs-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes qs-slide-up {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes qs-shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position:  200% 0; }
+}
+@keyframes qs-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: .45; }
+}
+@keyframes qs-spin {
+  to { transform: rotate(360deg); }
+}
+/* Tick flashes: a brief wash that decays to nothing, so a busy tape reads as
+   texture rather than as a strobing block of colour. */
+@keyframes qs-flash-up {
+  0%   { background-color: var(--market-up-soft); }
+  100% { background-color: transparent; }
+}
+@keyframes qs-flash-down {
+  0%   { background-color: var(--market-down-soft); }
+  100% { background-color: transparent; }
+}
+
+.qs-fade-in  { animation: qs-fade-in  var(--transition-base) both; }
+.qs-slide-up { animation: qs-slide-up var(--transition-base) both; }
+.tick-up     { animation: qs-flash-up   .45s ease-out; }
+.tick-down   { animation: qs-flash-down .45s ease-out; }

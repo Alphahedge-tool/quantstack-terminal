@@ -1,0 +1,44 @@
+node_modules
+dist
+dist-ssr
+
+# Backend refdata and session caches. Regenerable from the feed, and refdata
+# alone is ~4.4 GB — one 40 MB NSE instrument dump per session date. Committing
+# it would be larger than every other thing in this repo by three orders of
+# magnitude, and it goes stale daily.
+backend/cache/
+
+*.local
+
+# SECRETS — this repository is PUBLIC.
+#
+# backend/.env carries a Supabase SERVICE key (which bypasses row-level
+# security outright), a broker phone number, an MPIN and a TOTP seed. A commit
+# that reaches a public remote is scraped by credential bots within seconds,
+# and rewriting history afterwards does not revoke anything.
+#
+# No leading slash on any of these, so they match at EVERY depth — a bare
+# `.env` would cover the root and quietly miss backend/.env, which is the only
+# one that actually holds credentials.
+#
+# NOTE: gitignore has no block comments. Only `#` lines are comments; a line
+# starting `/*` is a PATTERN matching everything at the repo root, which is
+# exactly the mistake that once staged this repo down to a single file.
+#
+# The .example templates are the exception and are meant to be published —
+# field names, no values.
+.env
+.env.*
+*.env
+!.env.example
+!*.env.example
+
+# Debug captures — raw SSE dumps from the band-greeks and risk-reversal
+# streams, a few hundred KB of one session's scratch output.
+bg.txt
+bg2.txt
+rr.txt
+.vite
+node_modules/.tmp
+*.tsbuildinfo
+.DS_Store

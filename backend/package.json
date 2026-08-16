@@ -1,0 +1,28 @@
+{
+  "name": "qt-backend",
+  "version": "1.0.0",
+  "description": "QuantStack Trading Terminal — Node.js backend (Nubra + Rolling Straddle)",
+  "type": "module",
+  "main": "dist/main.js",
+  "scripts": {
+    "dev": "tsx watch main.ts",
+    "build": "tsc",
+    "start": "node dist/main.js",
+    "lint": "tsc --noEmit",
+    "verify:feeds": "tsx feeds/verify.ts",
+    "verify:instruments": "tsx scripts/verifyInstruments.ts",
+    "verify:decoders": "tsx scripts/verifyDecoders.ts",
+    "verify:trading": "tsx scripts/verifyTrading.ts",
+    "verify:session": "tsx scripts/verifySessionRecovery.ts",
+    "verify": "npm run verify:feeds && npm run verify:decoders && npm run verify:trading && npm run verify:instruments && npm run verify:session"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/ws": "^8.5.10",
+    "tsx": "^4.19.0",
+    "typescript": "^5.0.0"
+  }
+}
