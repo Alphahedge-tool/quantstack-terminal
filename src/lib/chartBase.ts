@@ -323,6 +323,41 @@ export function createBaseChart(host: HTMLElement, options: BaseChartOptions): B
  * margins than pane 0: it is the shorter pane, and the caption sitting in its
  * top-left corner would otherwise overlap the first few marks.
  */
+/**
+ * Bars of empty space kept between the last mark and the right price axis.
+ *
+ * Matches the `rightOffset` the chart is created with, so a fit and a live
+ * scroll leave the same gutter — two different amounts of breathing room
+ * depending on how the view was last changed reads as a rendering glitch.
+ */
+export const RIGHT_PAD_BARS = 6;
+
+/**
+ * Fit every bar, and keep the gutter.
+ *
+ * `fitContent()` alone is what was clipping the series against the price axis.
+ * It sets the visible range to EXACTLY the data extent, which discards the
+ * `rightOffset` configured on the time scale — so the newest candle, its price
+ * label and the live line's last segment all ended up drawn under the axis
+ * border with nowhere to go.
+ *
+ * The fix extends the logical range past the last bar rather than scrolling to
+ * it. `scrollToPosition` would be the obvious call and is wrong here: it moves
+ * the viewport without widening it, so six bars of gutter on the right push six
+ * bars off the left edge — a "fit" that no longer fits. A logical range may
+ * legitimately end beyond the final index; that is the same mechanism
+ * `rightOffset` uses.
+ */
+export function fitContentPadded(chart: IChartApi, bars = RIGHT_PAD_BARS): void {
+  const scale = chart.timeScale();
+  scale.fitContent();
+  const range = scale.getVisibleLogicalRange();
+  // Null before any data has been set — fitContent had nothing to fit, and
+  // there is no range to widen.
+  if (!range) return;
+  scale.setVisibleLogicalRange({ from: range.from, to: range.to + bars });
+}
+
 export function stylePaneScale(base: BaseChart, paneIndex: number): void {
   base.chart.priceScale('right', paneIndex).applyOptions({
     borderColor: base.theme.border,

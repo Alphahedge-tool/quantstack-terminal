@@ -11,6 +11,24 @@
  * keeps consuming roles.
  */
 
+/**
+ * Resolve one design token to a literal colour, for the canvas.
+ *
+ * Exported because `ChartTheme` can only name the roles it knows about, and a
+ * CATEGORICAL palette — one hue per symbol on the straddle wall, say — is chosen
+ * by the component, not by this file. Without an escape hatch the caller reaches
+ * for `var(--series-iv)`, which a canvas cannot resolve and paints BLACK. That
+ * has now happened twice in this project: once on the DTE-median overlay and
+ * once on the wall.
+ *
+ * Call it during render or in an effect, never at module scope: at module-eval
+ * time the stylesheet may not have applied and every token would come back as
+ * its fallback.
+ */
+export function cssToken(name: string, fallback: string): string {
+  return token(name, fallback);
+}
+
 /** Reads a custom property off the document root. */
 function token(name: string, fallback: string): string {
   if (typeof window === 'undefined') return fallback;

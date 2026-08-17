@@ -34,7 +34,8 @@ import { DetailValue, StatStrip, Trend } from '@/components/straddle/StatStrip';
 import { LAYOUTS, LayoutPicker, type LayoutId } from '@/components/straddle/LayoutPicker';
 import { StraddleSlot, type SlotConfig } from '@/components/straddle/StraddleSlot';
 import type { ChartKind } from '@/components/straddle/registry';
-import { useStraddleContract } from '@/components/straddle/useStraddleContract';
+import { todayIST, useStraddleContract } from '@/components/straddle/useStraddleContract';
+import { useLiveStraddle } from '@/hooks/useLiveStraddle';
 import { decimal, expiryLabel, percent, signed } from '@/lib/format';
 import { istClockSeconds } from '@/lib/chartTheme';
 
@@ -178,7 +179,48 @@ export function StraddlePage() {
    * numbers true of no contract on screen.
    */
   const summary = useStraddleContract(focused.symbol, focused.expiry, date);
-  const { last, history, expiry, rolls, rawRollCount, exchange, open } = summary;
+  const {
+    last: walkedLast, history, expiry, rolls: walkedRolls, rawRollCount, exchange, open,
+  } = summary;
+
+  /**
+   * The strip's live feed.
+   *
+   * The strip was showing the last WALKED point, which on a live session is
+   * whatever the session walk returned when it last ran — so the premium, spot,
+   * synthetic future, IV and greeks above the chart all sat frozen minutes
+   * behind the line moving underneath them. Reading a stale level as the current
+   * one is the single most expensive mistake this page can invite.
+   *
+   * This is not a second connection. `useLiveStraddle` keys its session by
+   * contract and reference-counts it, so the focused slot and this strip share
+   * one socket and one buffer — which also means they cannot disagree about the
+   * last trade, as two independent feeds eventually would.
+   *
+   * No `onGap` here: the slot owns that reload and it is the same query. Two
+   * throttles against one endpoint would just race each other.
+   */
+  const liveEnabled =
+    Boolean(expiry) && Boolean(history.data?.date) && history.data?.date === todayIST();
+  const live = useLiveStraddle({
+    symbol: focused.symbol,
+    exchange,
+    expiry,
+    atmHint: walkedLast?.atmStrike ?? null,
+    since: walkedLast?.time ?? null,
+    enabled: liveEnabled,
+  });
+
+  /*
+   * Live wins when it has anything, because it is by definition newer — the
+   * session walk cannot produce a point ahead of the socket. Falls back to the
+   * walk for a historical session, where `live.last` is null.
+   */
+  const last = live.last ?? walkedLast;
+  const rolls = useMemo(
+    () => (live.rolls.length ? [...walkedRolls, ...live.rolls] : walkedRolls),
+    [walkedRolls, live.rolls],
+  );
 
   /**
    * The opening baseline is `open.straddle`, NOT the backend's `entryStraddle`.

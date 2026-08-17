@@ -45,6 +45,11 @@ export const router = createBrowserRouter([
       { path: 'instruments', element: <InstrumentsPage /> },
       { path: 'analysis', element: <AnalysisPage /> },
       {
+        // Lazy for the same reason as /straddle — it pulls the charting engine.
+        path: 'wall',
+        lazy: async () => ({ Component: (await import('@/pages/WallPage')).WallPage }),
+      },
+      {
         /**
          * The one lazy route.
          *

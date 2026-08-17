@@ -31,6 +31,7 @@ import {
   MINUTE_INTERVALS,
   createBaseChart,
   finite,
+  fitContentPadded,
   lineData,
   num,
   pointAt,
@@ -191,7 +192,7 @@ function GreeksChartImpl({ points, height = 520, dense = false, className }: Pro
     series.putVega.setData(aggregated.putVega);
     series.callTheta.setData(aggregated.callTheta);
     series.putTheta.setData(aggregated.putTheta);
-    base.chart.timeScale().fitContent();
+    fitContentPadded(base.chart);
   }, [aggregated]);
 
   useEffect(() => {
@@ -206,7 +207,9 @@ function GreeksChartImpl({ points, height = 520, dense = false, className }: Pro
     setVisible((current) => ({ ...current, [key]: !(current[key] ?? true) }));
   }, []);
 
-  const fit = useCallback(() => baseRef.current?.chart.timeScale().fitContent(), []);
+  const fit = useCallback(() => {
+    if (baseRef.current) fitContentPadded(baseRef.current.chart);
+  }, []);
 
   /** Legs in the basket on this bar. A vega that halves because the band
    *  emptied is a different event from one that halves because vol moved, and

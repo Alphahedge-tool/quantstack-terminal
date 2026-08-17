@@ -38,6 +38,7 @@ import {
   MINUTE_INTERVALS,
   createBaseChart,
   finite,
+  fitContentPadded,
   lineData,
   pointAt,
   stylePaneScale,
@@ -197,7 +198,7 @@ function SkewChartImpl({ points, height = 520, dense = false, className }: Props
     series.putIv.setData(aggregated.putIv);
     series.atmIv.setData(aggregated.atmIv);
     series.rr.setData(aggregated.rr);
-    base.chart.timeScale().fitContent();
+    fitContentPadded(base.chart);
   }, [aggregated]);
 
   useEffect(() => {
@@ -212,7 +213,9 @@ function SkewChartImpl({ points, height = 520, dense = false, className }: Props
     setVisible((current) => ({ ...current, [key]: !(current[key] ?? true) }));
   }, []);
 
-  const fit = useCallback(() => baseRef.current?.chart.timeScale().fitContent(), []);
+  const fit = useCallback(() => {
+    if (baseRef.current) fitContentPadded(baseRef.current.chart);
+  }, []);
 
   return (
     <ChartFrame

@@ -44,9 +44,18 @@ export class LiveSocket<TFrame> {
   private _state: SocketState = 'closed';
 
   /**
-   * The last subscribe payload sent. Replayed on every reconnect — the server
-   * holds subscriptions per-connection, so a silent reconnect that did not
-   * replay would leave the UI connected and permanently priceless.
+   * The subscription to (re)send on every connection.
+   *
+   * Replayed on every reconnect — the server holds subscriptions
+   * per-connection, so a silent reconnect that did not replay would leave the
+   * UI connected and permanently priceless.
+   *
+   * A FUNCTION is allowed, and for the straddle channel it is required. That
+   * subscription carries `since` — the newest point the client already holds —
+   * so the backend can replay the hole a disconnect left. A fixed payload would
+   * resubscribe with the `since` captured when the page loaded, and every
+   * reconnect would ask the backend to replay the entire session from that
+   * original mark instead of from the gap.
    */
   private subscription: unknown = null;
 
@@ -89,7 +98,7 @@ export class LiveSocket<TFrame> {
     socket.onopen = () => {
       this.attempt = 0;
       this.setState('open');
-      if (this.subscription !== null) this.send(this.subscription);
+      this.sendSubscription();
       this.startPing();
     };
 
@@ -150,10 +159,25 @@ export class LiveSocket<TFrame> {
     this.ws.send(JSON.stringify(payload));
   }
 
-  /** Replace the subscription set. Remembered so a reconnect can replay it. */
-  subscribe(payload: unknown): void {
+  /**
+   * Replace the subscription. Remembered so a reconnect can replay it.
+   *
+   * Pass a function to have it recomputed for each connection.
+   */
+  subscribe(payload: unknown | (() => unknown)): void {
     this.subscription = payload;
-    this.send(payload);
+    this.sendSubscription();
+  }
+
+  private sendSubscription(): void {
+    if (this.subscription === null) return;
+    const payload =
+      typeof this.subscription === 'function'
+        ? (this.subscription as () => unknown)()
+        : this.subscription;
+    // A factory returning null means "nothing to subscribe to yet" — the socket
+    // stays open and the next reconnect or explicit subscribe will try again.
+    if (payload != null) this.send(payload);
   }
 
   onFrame(listener: Listener<TFrame>): () => void {

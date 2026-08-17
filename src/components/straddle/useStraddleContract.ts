@@ -29,6 +29,23 @@ export const UNDERLYINGS = [
   { value: 'NATURALGAS', exchange: 'MCX' },
 ] as const;
 
+/**
+ * Today's session date in IST, as `YYYY-MM-DD`.
+ *
+ * Shifted by the offset and then formatted as UTC, which is what makes it the
+ * IST WALL-CLOCK date rather than the browser's. A trader in London looking at
+ * an Indian session at 20:00 their time is on tomorrow's date by their own
+ * clock; the exchange is not, and the exchange is what the backend resolved its
+ * walk against.
+ *
+ * Shared by the page and the slot: both decide whether to open a live feed from
+ * it, and two definitions that could drift would let the strip go live while the
+ * chart stayed historical.
+ */
+export function todayIST(): string {
+  return new Date(Date.now() + 330 * 60_000).toISOString().slice(0, 10);
+}
+
 export function exchangeFor(symbol: string): string {
   return UNDERLYINGS.find((u) => u.value === symbol)?.exchange ?? 'NSE';
 }

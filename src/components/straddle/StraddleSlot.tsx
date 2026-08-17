@@ -18,14 +18,15 @@ import { Panel, PanelHeader } from '@/components/ui/Panel';
 import { Select, SegmentedControl } from '@/components/ui/Field';
 import { Button } from '@/components/ui/Button';
 import { EmptyState, ErrorState, Spinner } from '@/components/ui/States';
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { StraddleChart } from '@/components/chart/StraddleChart';
 import { GreeksChart } from '@/components/chart/GreeksChart';
 import { SkewChart } from '@/components/chart/SkewChart';
 import { X } from 'lucide-react';
-import { UNDERLYINGS, useStraddleContract } from './useStraddleContract';
+import { UNDERLYINGS, todayIST, useStraddleContract } from './useStraddleContract';
 import { useBandGreeks, useRiskReversal } from '@/hooks/queries';
 import { useDteMedian } from '@/hooks/dteMedian';
+import { useLiveStraddle } from '@/hooks/useLiveStraddle';
 import {
   medianProfile, openAnchor, projectToPoints, unitScales, type CompareUnits,
 } from '@/lib/straddle/dteMedian';
@@ -60,8 +61,66 @@ interface Props {
 export function StraddleSlot({
   slot, date, height, dense, focused, showFocus, onFocus, onChange,
 }: Props) {
-  const { available, expiry, expiries, history, points, rolls, exchange } =
-    useStraddleContract(slot.symbol, slot.expiry, date);
+  const {
+    available, expiry, expiries, history,
+    points: walked, rolls: walkedRolls, exchange,
+  } = useStraddleContract(slot.symbol, slot.expiry, date);
+
+  /**
+   * The live feed, but only for the session that is actually today.
+   *
+   * A walk of 2026-08-07 must never have today's ticks appended to it — the
+   * points would be silently wrong rather than visibly absent, which is the
+   * worse failure. `history.data.date` is the day the backend resolved, so the
+   * comparison is against what was walked rather than against the `date` prop,
+   * which is blank for "latest".
+   */
+  const walkedDate = history.data?.date ?? '';
+  const isToday = Boolean(walkedDate) && walkedDate === todayIST();
+
+  const lastWalked = walked.length ? walked[walked.length - 1] : null;
+
+  const liveGapReloadRef = useRef(0);
+  const live = useLiveStraddle({
+    symbol: slot.symbol,
+    exchange,
+    expiry,
+    atmHint: lastWalked?.atmStrike ?? null,
+    since: lastWalked?.time ?? null,
+    enabled: slot.kind === 'straddle' && isToday && Boolean(expiry),
+    /*
+     * A hole the socket cannot close is refilled from history — throttled,
+     * because a flapping connection would otherwise turn into a reload storm
+     * against an endpoint that takes seconds to answer.
+     */
+    onGap: () => {
+      const now = Date.now();
+      if (now - liveGapReloadRef.current < 30_000) return;
+      liveGapReloadRef.current = now;
+      void history.refetch();
+    },
+  });
+
+  /**
+   * History plus live, as one series.
+   *
+   * Concatenated rather than drawn as a second line: the backend applies the
+   * same cheapest-of-band rule to both, so they are the same quantity and a
+   * seam between them would be a fiction. Live points at or before the last
+   * walked point are dropped — a reload can overlap the ticks already held, and
+   * lightweight-charts throws on a non-ascending series.
+   */
+  const points = useMemo(() => {
+    if (!live.points.length) return walked;
+    const cutoff = lastWalked?.time ?? -Infinity;
+    const fresh = live.points.filter((p) => p.time > cutoff);
+    return fresh.length ? [...walked, ...fresh] : walked;
+  }, [walked, live.points, lastWalked]);
+
+  const rolls = useMemo(
+    () => (live.rolls.length ? [...walkedRolls, ...live.rolls] : walkedRolls),
+    [walkedRolls, live.rolls],
+  );
 
   /**
    * The two basket queries are declared unconditionally but `enabled` only for
@@ -148,11 +207,28 @@ export function StraddleSlot({
   const compare = useMemo(() => {
     if (compareMode !== 'dte-median' || !scaledProfile.points.length) return null;
     const first = points[0]?.time;
-    if (!first) return null;
+    const last = points[points.length - 1]?.time;
+    if (!first || !last) return null;
+
+    /*
+     * Clipped to where TODAY has actually printed.
+     *
+     * The cohort is five completed sessions, so its profile always runs the full
+     * 09:15–15:30. Today does not: at 11:00 the live line stops there while the
+     * median would carry on to the close, and a reader sees a reference that
+     * appears to know the rest of the day. Worse, the crosshair readout would
+     * report a "vs median" for minutes today has not reached, computed against
+     * nothing.
+     *
+     * So the overlay ends at the last point on the chart and extends as the live
+     * feed does. Clipped by TIME rather than by count because the two series have
+     * different densities — the cohort is one value a minute, today's walk is one
+     * a second — so equal indices are not equal instants.
+     */
     return {
       label: `${compareUnits === 'raw' ? 'Raw' : 'Rebased'} median ` +
         `${dteMedian.sessions.length} × ${dteMedian.targetDte} DTE`,
-      data: projectToPoints(scaledProfile, first),
+      data: projectToPoints(scaledProfile, first).filter((p) => p.time * 1000 <= last),
     };
   }, [
     compareMode, scaledProfile, compareUnits,
@@ -270,7 +346,18 @@ export function StraddleSlot({
           // header is a caption on the plot, not a section heading.
           dense
           title={slot.kind ? `${slot.symbol} ${expiry || '—'}` : 'Empty pane'}
-          subtitle={slot.kind ? `${exchange} · ${spec?.label}` : undefined}
+          subtitle={
+            slot.kind
+              ? [
+                  exchange,
+                  spec?.label,
+                  // Only when there is something to say. A "—" or an "idle" on a
+                  // historical session would read as a broken feed rather than as
+                  // a day that finished before the socket could matter.
+                  live.state !== 'idle' ? live.status || live.state : null,
+                ].filter(Boolean).join(' · ')
+              : undefined
+          }
           icon={Icon ? <Icon size={14} /> : undefined}
           actions={controls}
         />

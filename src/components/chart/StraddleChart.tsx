@@ -57,6 +57,7 @@ import {
   candleData,
   createBaseChart,
   finite,
+  fitContentPadded,
   lineData,
   num,
   pointAt,
@@ -437,10 +438,54 @@ function StraddleChartImpl({
     };
   }, [points, interval]);
 
+  /**
+   * What the last render drew, so growth can be told from replacement.
+   *
+   * The two need completely different viewport handling and they arrive through
+   * the same effect: a live flush appends one bar to the series already on
+   * screen, while changing contract, interval or session replaces it wholesale.
+   */
+  const drawnRef = useRef({ firstBar: 0, interval: '', count: 0 });
+
   useEffect(() => {
     const series = seriesRef.current;
     const base = baseRef.current;
     if (!series || !base) return;
+
+    /*
+     * Read the viewport BEFORE the data changes.
+     *
+     * `setData` preserves the logical range, so afterwards there is no way to
+     * tell whether the user had been watching the live edge or had panned back
+     * to the morning — and those two want opposite things to happen.
+     */
+    const scale = base.chart.timeScale();
+    const before = scale.getVisibleLogicalRange();
+    const drawn = drawnRef.current;
+    // Coerced: candle times are the library's branded `Time`, and the identity
+    // check below only needs the numeric value.
+    const first = Number(aggregated.candles[0]?.time ?? 0);
+
+    /*
+     * GREW means the same series with more bars on the end. Anything else — a
+     * new contract, a new session, a different interval, or a shorter series
+     * than last time — is a replacement.
+     */
+    const grew =
+      drawn.count > 0 &&
+      first === drawn.firstBar &&
+      interval === drawn.interval &&
+      aggregated.candles.length >= drawn.count;
+
+    /*
+     * "Was the user at the live edge?" — within a couple of bars of the last
+     * one, which is where `RIGHT_PAD_BARS` of gutter already puts them after a
+     * fit. Slack rather than an equality test because the gutter, fractional
+     * logical positions and a half-visible bar all put `to` slightly past the
+     * final index.
+     */
+    const wasAtEdge =
+      before != null && before.to >= drawn.count - 1 - 2;
 
     series.straddle.setData(aggregated.candles);
     series.bid.setData(aggregated.bid);
@@ -514,7 +559,42 @@ function StraddleChartImpl({
     }
     markersRef.current?.setMarkers(markers);
 
-    base.chart.timeScale().fitContent();
+    /*
+     * The viewport.
+     *
+     * This used to be an unconditional `fitContent`, which was fine while the
+     * chart only ever loaded finished sessions and became wrong the moment live
+     * ticks started flushing into it once a second. Every flush re-fitted: the
+     * range widened by a bar, the whole series compressed slightly, and the plot
+     * appeared to crawl leftwards — and any pan or zoom the reader had made was
+     * discarded a second later.
+     *
+     * So a fit is now what happens when the series is REPLACED. When it merely
+     * grew there are two honest behaviours and which one applies is the reader's
+     * choice, expressed by where they left the viewport:
+     *
+     *   at the live edge  → follow it. Shift by exactly the bars that arrived,
+     *                       preserving the zoom, so the newest tick stays in the
+     *                       same place on screen instead of the chart rescaling.
+     *   panned away       → leave it alone. Someone reading 11:40 does not want
+     *                       to be yanked to the close every second, and
+     *                       `setData` already preserves the range, so the
+     *                       correct action is none.
+     */
+    if (!grew) {
+      fitContentPadded(base.chart);
+    } else if (wasAtEdge && before) {
+      const added = aggregated.candles.length - drawn.count;
+      if (added > 0) {
+        scale.setVisibleLogicalRange({ from: before.from + added, to: before.to + added });
+      }
+    }
+
+    drawnRef.current = {
+      firstBar: first,
+      interval,
+      count: aggregated.candles.length,
+    };
   }, [aggregated, rollEvents, interval, dense, compare]);
 
   /**
@@ -553,7 +633,9 @@ function StraddleChartImpl({
     setVisible((current) => ({ ...current, [key]: !(current[key] ?? true) }));
   }, []);
 
-  const fit = useCallback(() => baseRef.current?.chart.timeScale().fitContent(), []);
+  const fit = useCallback(() => {
+    if (baseRef.current) fitContentPadded(baseRef.current.chart);
+  }, []);
 
   const comparing = Boolean(compare);
 
