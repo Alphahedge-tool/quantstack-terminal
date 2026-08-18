@@ -167,4 +167,19 @@ export const api = {
     body?: unknown,
     opts?: Omit<RequestOptions, 'method' | 'body'>,
   ): Promise<z.infer<S>> => request(path, schema, { ...opts, method: 'POST', body }),
+
+  /*
+   * DELETE carries no body and its response is an acknowledgement, so the
+   * schema defaults to the envelope every route already returns. Callers that
+   * need the deleted ids pass a fuller schema; callers that only care whether
+   * it worked pass nothing and let a rejection speak for itself.
+   */
+  del: <S extends z.ZodTypeAny = typeof ackSchema>(
+    path: string,
+    schema?: S,
+    opts?: Omit<RequestOptions, 'method' | 'body'>,
+  ): Promise<z.infer<S>> =>
+    request(path, (schema ?? ackSchema) as S, { ...opts, method: 'DELETE' }),
 };
+
+const ackSchema = z.object({ status: z.boolean() }).passthrough();

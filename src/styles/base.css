@@ -150,3 +150,35 @@ input[type="number"] {
 .qs-slide-up { animation: qs-slide-up var(--transition-base) both; }
 .tick-up     { animation: qs-flash-up   .45s ease-out; }
 .tick-down   { animation: qs-flash-down .45s ease-out; }
+
+/* ── IRIS orb ──────────────────────────────────────────────────────────────
+   Three decorative animations, all GPU-composited (transform/opacity only) so
+   they never trigger layout on a page that is already repainting live tables.
+
+   Every one is gated on prefers-reduced-motion below. The orb is permanently
+   on screen and sits in peripheral vision while the user reads numbers, so a
+   rotating object there is genuinely distracting rather than merely lively —
+   state stays legible from the ring colour alone with motion off. */
+@keyframes iris-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes iris-pulse {
+  0%   { transform: scale(1);    opacity: .55; }
+  70%  { transform: scale(1.45); opacity: 0; }
+  100% { transform: scale(1.45); opacity: 0; }
+}
+@keyframes iris-breathe {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(.93); }
+}
+
+.iris-spin    { animation: iris-spin 7s linear infinite; }
+.iris-pulse   { animation: iris-pulse 1.9s ease-out infinite; }
+.iris-breathe { animation: iris-breathe 1.7s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .iris-spin,
+  .iris-pulse,
+  .iris-breathe { animation: none; }
+  .iris-pulse   { opacity: .35; }
+}

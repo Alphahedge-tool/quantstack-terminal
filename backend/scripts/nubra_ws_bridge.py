@@ -111,6 +111,7 @@ def main():
     interval = str(config.get("interval") or "1m").strip()
     expiry = str(config.get("expiry") or "").strip()
     ref_ids = [str(r).strip() for r in config.get("refIds") or [] if str(r).strip()]
+    post_market = bool(config.get("postMarket"))
     index_symbols = [
         str(s).upper().strip()
         for s in config.get("indexSymbols") or []
@@ -138,6 +139,28 @@ def main():
         on_error=lambda e: emit("error", message=str(e)),
     )
     socket.connect()
+
+    # Post-market mode.
+    #
+    # Outside market hours the live channels publish nothing at all, so a chain
+    # subscription connects cleanly and then sits silent forever — which reads
+    # downstream as "the feed is broken" rather than "the market is shut".
+    # Nubra's `post_market` control swaps the streams to a static end-of-day
+    # snapshot, which is what makes the terminal testable at 11pm.
+    #
+    # The literal is the lowercase string, not Python's True: the SDK
+    # interpolates the argument straight into `batch_subscribe … post_market
+    # {v}`, and `True` would put a capitalised token on the wire where the
+    # protocol documents `true`.
+    #
+    # Best-effort by design — an older SDK without the method must not take the
+    # whole bridge down, because live mode does not need it.
+    if post_market:
+        try:
+            socket.post_market("true")
+            emit("status", status="post_market", message="static end-of-day data enabled")
+        except Exception as exc:
+            emit("log", message=f"post_market unsupported: {exc}")
 
     if mode == "quotes":
         # ── Per-contract mode ──

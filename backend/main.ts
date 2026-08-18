@@ -83,6 +83,7 @@ import './routes/optionMarks.js';
 import './routes/ivSurface.js';
 import './routes/brokerAccounts.js';
 import './routes/zerodhaLogin.js';
+import './routes/assistant.js';
 
 // ── Feeds + server ────────────────────────────────────────────────────────────
 import { feeds } from './feeds/registry.js';
@@ -93,6 +94,7 @@ import { startServer } from './server.js';
 import { attachLiveStraddleSocket } from './live/wsStraddle.js';
 import { attachLiveOrdersSocket } from './live/wsOrders.js';
 import { attachLiveQuotesSocket } from './live/wsQuotes.js';
+import { attachAssistantSocket } from './live/wsAssistant.js';
 
 const PORT = Number(process.env.QT_BACKEND_PORT || 3101);
 
@@ -129,3 +131,8 @@ const server = startServer(PORT);
 attachLiveStraddleSocket(server);
 attachLiveOrdersSocket(server);
 attachLiveQuotesSocket(server);
+// IRIS. Deliberately last and deliberately lazy: the monitor only starts when a
+// client actually connects, so a backend nobody has a browser open against
+// holds no chain subscriptions. Persisted watches are restored on that first
+// connection, not at boot.
+attachAssistantSocket(server);

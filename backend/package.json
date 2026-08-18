@@ -14,7 +14,8 @@
     "verify:decoders": "tsx scripts/verifyDecoders.ts",
     "verify:trading": "tsx scripts/verifyTrading.ts",
     "verify:session": "tsx scripts/verifySessionRecovery.ts",
-    "verify": "npm run verify:feeds && npm run verify:decoders && npm run verify:trading && npm run verify:instruments && npm run verify:session"
+    "verify:assistant": "tsx scripts/verifyAssistant.ts",
+    "verify": "npm run verify:feeds && npm run verify:decoders && npm run verify:trading && npm run verify:instruments && npm run verify:session && npm run verify:assistant"
   },
   "dependencies": {
     "ws": "^8.18.0"

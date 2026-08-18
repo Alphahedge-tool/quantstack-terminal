@@ -54,6 +54,17 @@ export interface BridgeConfig {
   /** Underlyings to stream over `index`, for a spot that ticks. Quotes mode. */
   indexSymbols?: string[];
 
+  /**
+   * Ask Nubra for static end-of-day data instead of live ticks.
+   *
+   * Outside market hours every channel is silent, so a subscription succeeds
+   * and then never publishes — indistinguishable downstream from a broken
+   * feed. This swaps to the post-market snapshot so the terminal has something
+   * to show and to test against after the close. Never set during market
+   * hours: the data does not update.
+   */
+  postMarket?: boolean;
+
   // ── straddle mode only ──
   symbol?:     string;
   spotSymbol?: string;

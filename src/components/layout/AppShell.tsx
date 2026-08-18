@@ -12,6 +12,7 @@ import { SideNav } from './SideNav';
 import { StatusBar } from './StatusBar';
 import { TopBar } from './TopBar';
 import { useLiveQuoteChannel } from '@/hooks/useLiveQuotes';
+import { Iris } from '@/components/assistant/Iris';
 
 export function AppShell() {
   // Mounted once, here. The socket outlives every page below it.
@@ -36,6 +37,13 @@ export function AppShell() {
       </div>
 
       <StatusBar />
+
+      {/* IRIS. Here rather than in each page for the same reason the quote
+          socket is: it holds a conversation and a live alert channel, and a
+          per-page mount would reset both on every navigation. Fixed-positioned,
+          so it sits outside the scroll region above and floats over whatever
+          the route renders. */}
+      <Iris />
     </div>
   );
 }
