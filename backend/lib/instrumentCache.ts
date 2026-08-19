@@ -467,9 +467,31 @@ export async function getCachedExpiries(
   return slot.eligibleMap.get(asset.trim().toUpperCase())?.expiries ?? [];
 }
 
-/** Exchanges warmed on login. Override with QT_INSTRUMENT_EXCHANGES=NSE,BSE,MCX */
-export const WARM_EXCHANGES = (process.env.QT_INSTRUMENT_EXCHANGES || 'NSE,MCX')
+/**
+ * Exchanges warmed on login. Override with QT_INSTRUMENT_EXCHANGES=NSE,BSE,MCX
+ *
+ * BSE is in the default list because SENSEX and BANKEX live there and nowhere
+ * else — verified against the live backend, where `SENSEX` on NSE returns zero
+ * expiries and on BSE returns nineteen. Leaving BSE cold made every BSE symbol
+ * invisible to `searchEligible`, so the symbol picker could not offer a
+ * contract the straddle engine is perfectly able to walk.
+ */
+export const WARM_EXCHANGES = (process.env.QT_INSTRUMENT_EXCHANGES || 'NSE,BSE,MCX')
   .split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
+
+/**
+ * Warm one exchange/date slot on demand.
+ *
+ * `warmInstrumentCache` only covers WARM_EXCHANGES; a search scoped to an
+ * exchange outside that list (CDS, NFO, or BSE with the env var overridden)
+ * would otherwise answer "no results" for symbols that do exist. This is a
+ * no-op once the slot is cached.
+ */
+export async function warmExchange(
+  exchange: string, date: string, session: NubraSession,
+): Promise<void> {
+  await getSlot(exchange.toUpperCase(), date, session);
+}
 
 export function todayIST(): string {
   return new Intl.DateTimeFormat('en-CA', {

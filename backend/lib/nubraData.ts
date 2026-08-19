@@ -26,6 +26,9 @@ export interface NubraOptionSeries {
   ivBid: NubraPoint[];
   ivAsk: NubraPoint[];
   ivMid: NubraPoint[];
+  /** From `cumulative_oi` and `cumulative_volume` — plain counts, not paise. */
+  oi:     NubraPoint[];
+  volume: NubraPoint[];
   /**
    * Per-leg greeks, straight from the feed.
    *
@@ -341,6 +344,11 @@ export function parseRollingSeriesValues(
         gamma: parsePoints(sd?.gamma, false),
         vega:  parsePoints(sd?.vega,  false),
         theta: parsePoints(sd?.theta, false),
+        // Counts, so the rupee flag stays off. `cumulative_oi` is the
+        // documented field name; `oi` is accepted by the endpoint and answers
+        // with nothing, which is how it was missed the first time.
+        oi:     parsePoints(sd?.cumulative_oi, false),
+        volume: parsePoints(sd?.cumulative_volume, false),
       };
 
       if ((series.bid.length || series.ask.length) && !seriesByName.has(canonicalName)) {
@@ -374,6 +382,27 @@ const QUOTE_FIELDS = ['l1bid', 'l1ask', 'iv_bid', 'iv_ask', 'close'] as const;
 export type GreekFieldName = 'delta' | 'gamma' | 'vega' | 'theta';
 
 /**
+ * Non-greek extras, and the wire names they map to.
+ *
+ * `cumulative_oi` is the OI a contract carries, sampled per bar — not a change
+ * and not an aggregate over the chain, despite the "cumulative" prefix, which
+ * on this endpoint means "state as of this bar" rather than "sum since open".
+ * Verified against the live feed: NIFTY 23950 CE walked 64,220 to 420,875 over
+ * one session in 363 distinct steps.
+ *
+ * These are requested separately from the greeks because their availability
+ * windows differ: measured on this feed, OI reaches back at least 180 days at
+ * 1m while feed gamma stops after roughly a month. A caller wanting a
+ * historical OI ladder must be able to ask for OI alone.
+ */
+export type ExtraFieldName = 'oi' | 'volume';
+
+const EXTRA_WIRE: Record<ExtraFieldName, string> = {
+  oi: 'cumulative_oi',
+  volume: 'cumulative_volume',
+};
+
+/**
  * Latched when the feed proves it will not serve GREEK_FIELDS. Process-wide and
  * deliberately never reset: the answer is a property of the endpoint, not of a
  * request, so re-probing it on every batch would repeat the failure ~9 times a
@@ -389,12 +418,27 @@ async function fetchRollingBatch(opts: {
   exchange: string;
   session: NubraSession;
   greeks?: readonly GreekFieldName[];
+  extras?: readonly ExtraFieldName[];
 }): Promise<unknown[]> {
   const { batch, start, end, interval, exchange, session } = opts;
   const asked = opts.greeks ?? [];
+  /*
+   * Extras ride on EVERY attempt, including the no-greeks retry.
+   *
+   * The greek retry exists because a 400 may be the greek field names; OI is a
+   * different field family with a different availability window, and dropping
+   * it alongside the greeks would silently return a session with no OI on any
+   * contract older than the greek window — which is precisely the case the OI
+   * history is wanted for.
+   */
+  const extraWire = (opts.extras ?? []).map((e) => EXTRA_WIRE[e]);
   const build = (withGreeks: boolean) => ({
     exchange, type: 'OPT', values: batch,
-    fields: withGreeks && asked.length ? [...QUOTE_FIELDS, ...asked] : [...QUOTE_FIELDS],
+    fields: [
+      ...QUOTE_FIELDS,
+      ...(withGreeks && asked.length ? asked : []),
+      ...extraWire,
+    ],
     startDate: start, endDate: end, intraDay: false, realTime: false,
   });
 
@@ -467,8 +511,10 @@ export async function fetchRollingSeries(opts: {
   session: NubraSession;
   /** Greeks to request. Omitted = none; see GreekFieldName for why it matters. */
   greeks?: readonly GreekFieldName[];
+  /** OI and volume. Omitted = none; see ExtraFieldName. */
+  extras?: readonly ExtraFieldName[];
 }): Promise<Map<string, NubraOptionSeries>> {
-  const { names, start, end, interval, exchange, session, greeks } = opts;
+  const { names, start, end, interval, exchange, session, greeks, extras } = opts;
   const aliasToCanonical = opts.aliasToCanonical ?? new Map<string, string>();
   const seriesByName = new Map<string, NubraOptionSeries>();
   let firstError: unknown = null;
@@ -486,7 +532,7 @@ export async function fetchRollingSeries(opts: {
       batches.map((batch) => async () => {
         try {
           const values = await withRetry(
-            () => fetchRollingBatch({ batch, start, end, interval, exchange, session, greeks }),
+            () => fetchRollingBatch({ batch, start, end, interval, exchange, session, greeks, extras }),
           );
           // Synchronous, so concurrent batches can't interleave inside it.
           parseRollingSeriesValues(values, seriesByName, aliasToCanonical);

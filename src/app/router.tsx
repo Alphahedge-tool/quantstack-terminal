@@ -50,6 +50,11 @@ export const router = createBrowserRouter([
         lazy: async () => ({ Component: (await import('@/pages/WallPage')).WallPage }),
       },
       {
+        // Same reason again: the cockpit's tape is a canvas chart.
+        path: 'expiry',
+        lazy: async () => ({ Component: (await import('@/pages/ExpiryPage')).ExpiryPage }),
+      },
+      {
         /**
          * The one lazy route.
          *

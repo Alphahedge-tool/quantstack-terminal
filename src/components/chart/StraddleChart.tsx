@@ -1,5 +1,5 @@
 /**
- * The straddle session chart — two panes, one time axis.
+ * The straddle session chart — up to four panes, one time axis.
  *
  * ── Why one chart and not three ──
  *
@@ -13,13 +13,33 @@
  * So the honesty argument (never overlay two units on one axis) is preserved,
  * and the cost (three disconnected viewports) is not paid:
  *
- *   Pane 0  straddle premium as candles + bid/ask, right scale, rupees
- *           ATM implied volatility,               LEFT scale, percent
- *   Pane 1  synthetic future + spot,              right scale, index points
+ *   Pane 0  straddle premium as candles + bid/ask + the median overlay, rupees
+ *           ATM implied volatility,                        LEFT scale, percent
+ *   Pane 1  synthetic future + spot,                             index points
+ *   Pane 2  straddle MINUS the median — only while comparing,         rupees
  *
  * IV shares pane 0 with premium because reading them together is the entire
- * job — but on its own scale, clearly labelled, never on the premium axis.
+ * job — a premium that rose on vol and one that rose on a move in the
+ * underlying are different events, and telling them apart means seeing both
+ * lines cross the same minute. It keeps its own scale on the left, so the two
+ * never share a number line, and the axis is tinted to the series.
+ *
+ * It briefly had a pane of its own. That is the more defensible arrangement on
+ * paper — a series' shape should not be set by a neighbour's autoscale — and it
+ * was worse to use: the two lines you most need to read together ended up in
+ * two boxes with a divider between them, and every other pane got shorter to
+ * pay for it.
+ *
  * Spot and the synthetic future genuinely share a unit, so those two overlay.
+ *
+ * ── The vs-median pane ──
+ *
+ * The overlay in pane 0 answers "where is today against a typical session at
+ * this DTE" only by eye, and by eye is not good enough when the two lines run
+ * within a few rupees of each other for an hour. Pane 3 plots the DIFFERENCE
+ * against a zero line, so below-the-median is a filled region rather than a
+ * judgement about which of two lines is on top — and the moment it crosses is a
+ * position on the time axis rather than something you have to hunt for.
  *
  * ── Why the raw series, not a decimated one ──
  *
@@ -37,10 +57,12 @@
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  BaselineSeries,
   CandlestickSeries,
   LineSeries,
   LineStyle,
   createSeriesMarkers,
+  type BaselineData,
   type CandlestickData,
   type IChartApi,
   type ISeriesApi,
@@ -66,7 +88,7 @@ import {
   toneFor,
   type BaseChart,
 } from '@/lib/chartBase';
-import { istClockSeconds } from '@/lib/chartTheme';
+import { alphaOf, istClockSeconds } from '@/lib/chartTheme';
 import type { StraddlePoint } from '@/schemas/market';
 
 export interface RollEvent {
@@ -130,6 +152,9 @@ interface Readout {
   /** The comparison's value at this bar, and today's distance from it. */
   compare: number | null;
   vsCompare: number | null;
+  /** That distance as a share of the median, which is the comparable figure
+   *  across contracts an order of magnitude apart in premium. */
+  vsComparePct: number | null;
   /** The cohort's spread behind that median — see MedianPoint.lo/hi. */
   compareRange: { lo: number; hi: number; n: number } | null;
 }
@@ -173,6 +198,21 @@ const ALL_ON: Record<string, boolean> = Object.fromEntries(
 );
 
 /**
+ * Pane indices, named.
+ *
+ * `addSeries(..., 2)` is the kind of literal that survives one refactor and
+ * then quietly puts spot in the wrong box. The vs-median pane exists only while
+ * a comparison is running, which is also why it is last: an index that shifts
+ * would move every series above it.
+ *
+ * There is no PANE_IV — implied vol lives in pane 0 on the left scale, which is
+ * a SCALE and not a pane. See the header.
+ */
+const PANE_PREMIUM = 0;
+const PANE_SF = 1;
+const PANE_VS = 2;
+
+/**
  * The interval a comparison is only meaningful at.
  *
  * The cohort is pooled minute by minute, so the overlay HAS one value per
@@ -193,6 +233,17 @@ function StraddleChartImpl({
   const [visible, setVisible] = useState<Record<string, boolean>>(ALL_ON);
   const [readout, setReadout] = useState<Readout | null>(null);
 
+  /**
+   * Is a comparison running — from the SELECTION, not from the data.
+   *
+   * `compare` is null for the ten to thirty seconds the cohort takes to walk,
+   * so keying the layout on it would build the chart without the vs-median
+   * pane and then rebuild it the moment the data landed, throwing away whatever
+   * zoom the reader had set in the meantime. The selection is true from the
+   * click, so the pane appears with the toggle and simply fills in.
+   */
+  const comparing = Boolean(compareValue && compareValue !== 'none');
+
   const hostRef = useRef<HTMLDivElement>(null);
   const baseRef = useRef<BaseChart | null>(null);
   const seriesRef = useRef<{
@@ -205,6 +256,8 @@ function StraddleChartImpl({
     compare: ISeriesApi<'Line'>;
     compareLo: ISeriesApi<'Line'>;
     compareHi: ISeriesApi<'Line'>;
+    /** Null whenever no comparison is running — the pane does not exist. */
+    vs: ISeriesApi<'Baseline'> | null;
   } | null>(null);
   const markersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
 
@@ -229,11 +282,18 @@ function StraddleChartImpl({
     if (!host) return;
 
     const base = createBaseChart(host, {
+      /*
+       * Premium is the subject; everything under it is context, and the stretch
+       * factors say so before a single number is read. 3:1 with one context
+       * pane, 4:1:1 with two — the candles keep two thirds of the chart either
+       * way, which is the point of the ratio rather than the numbers in it.
+       */
       panes: [
-        // Premium is the subject; the synthetic future is context. 3:1 rather
-        // than an even split says so before a single number is read.
-        { caption: 'Straddle premium · ATM IV', stretch: 3 },
+        { caption: 'Straddle premium · ATM IV', stretch: comparing ? 4 : 3 },
         { caption: 'Synthetic future · Spot', stretch: 1 },
+        ...(comparing
+          ? [{ caption: 'Straddle vs median · below the line is cheap', stretch: 1 }]
+          : []),
       ],
       // IV owns the left scale alone, so premium and volatility never share a
       // number line even though they share a pane. The axis is tinted to the
@@ -273,7 +333,10 @@ function StraddleChartImpl({
       wickUpColor: theme.up,
       wickDownColor: theme.down,
       borderVisible: false,
-    });
+      // Stated rather than defaulted. Every other series on this chart names
+      // its pane, and the one that does not is the one a later edit moves by
+      // accident.
+    }, PANE_PREMIUM);
 
     // Bid and ask are thin and dim on purpose: they bracket the mid, and a
     // three-line-thick spread band would out-shout the price it describes.
@@ -285,11 +348,13 @@ function StraddleChartImpl({
       ...common, priceScaleId: 'right', title: 'Ask',
       color: theme.ask, lineWidth: 1, lastValueVisible: false,
     });
+    // Pane 0, LEFT scale — beside the premium it is derived from, on a number
+    // line of its own.
     const iv = chart.addSeries(LineSeries, {
       ...common, priceScaleId: 'left', title: 'ATM IV',
       color: theme.iv, lineWidth: 2,
       priceFormat: { type: 'custom', formatter: (v: number) => `${v.toFixed(2)}%` },
-    });
+    }, PANE_PREMIUM);
 
     // The comparison, on the PREMIUM scale — it arrives already in points, so
     // it belongs on the same number line as the candles it is being read
@@ -351,18 +416,74 @@ function StraddleChartImpl({
       ...common, priceScaleId: 'right', title: 'Syn. future',
       color: theme.sf, lineWidth: 2,
       priceFormat: { type: 'price', precision: 2, minMove: 0.05 },
-    }, 1);
+    }, PANE_SF);
     const spot = chart.addSeries(LineSeries, {
       ...common, priceScaleId: 'right', title: 'Spot',
       color: theme.spot, lineWidth: 1, lineStyle: LineStyle.Dotted,
       priceFormat: { type: 'price', precision: 2, minMove: 0.05 },
-    }, 1);
+    }, PANE_SF);
 
-    stylePaneScale(base, 1);
+    /**
+     * Pane 2 — the straddle MINUS the median, against zero.
+     *
+     * ── Why a baseline series and not a second line ──
+     *
+     * A baseline series is the one primitive in the library that paints the
+     * region between the data and a fixed level, in a different colour on each
+     * side of it. That is exactly the claim being made: everything below the
+     * line is a session cheaper than a typical one at this DTE, everything
+     * above is one carrying more premium. Drawn as a plain line, the reader is
+     * back to comparing a curve against an axis tick — which is the work pane 0
+     * already makes them do.
+     *
+     * ── The colours ──
+     *
+     * Down-red BELOW zero, up-green ABOVE it, matching `toneFor` and the signed
+     * "vs median" figure in the readout. It is tempting to invert them — cheap
+     * is the buyer's opportunity, so cheap should be green — but colour on this
+     * chart already means the SIGN of a number everywhere else, and one series
+     * where green means "the number went down" would poison the vocabulary. The
+     * caption carries the interpretation instead.
+     *
+     * `relativeGradient` anchors each gradient to the baseline rather than to
+     * the pane edges, so the wash is densest exactly at the crossing.
+     */
+    const vs = comparing
+      ? chart.addSeries(BaselineSeries, {
+        ...common,
+        priceScaleId: 'right',
+        title: 'vs median',
+        baseValue: { type: 'price' as const, price: 0 },
+        relativeGradient: true,
+        topLineColor: theme.up,
+        topFillColor1: alphaOf(theme.up, 0.32),
+        topFillColor2: alphaOf(theme.up, 0.02),
+        bottomLineColor: theme.down,
+        bottomFillColor1: alphaOf(theme.down, 0.02),
+        bottomFillColor2: alphaOf(theme.down, 0.32),
+        lineWidth: 2 as const,
+        priceFormat: { type: 'price' as const, precision: 2, minMove: 0.05 },
+      }, PANE_VS)
+      : null;
+
+    // The zero line is the entire reference, and the autoscale does not always
+    // include it — on a session that never crossed, the pane would otherwise be
+    // a wash with nothing to be a wash relative to.
+    vs?.createPriceLine({
+      price: 0,
+      color: theme.compareBand,
+      lineWidth: 1,
+      lineStyle: LineStyle.Dotted,
+      axisLabelVisible: false,
+      title: 'median',
+    });
+
+    stylePaneScale(base, PANE_SF);
+    if (vs) stylePaneScale(base, PANE_VS);
 
     seriesRef.current = {
       straddle, bid, ask, iv, sf, spot,
-      compare: compareLine, compareLo, compareHi,
+      compare: compareLine, compareLo, compareHi, vs,
     };
     markersRef.current = createSeriesMarkers(straddle, []);
 
@@ -408,6 +529,13 @@ function StraddleChartImpl({
         // premium than a typical session at this DTE had at this minute.
         vsCompare:
           compareValueAt !== null && candle ? candle.close - compareValueAt : null,
+        // As a share of the median, which is the figure that compares across
+        // contracts: 12 rupees under the median is a rounding error on BANKNIFTY
+        // and a third of the premium on a NIFTY weekly at 1 DTE.
+        vsComparePct:
+          compareValueAt !== null && compareValueAt !== 0 && candle
+            ? ((candle.close - compareValueAt) / compareValueAt) * 100
+            : null,
         compareRange: spread,
       });
     };
@@ -420,11 +548,33 @@ function StraddleChartImpl({
       seriesRef.current = null;
       markersRef.current = null;
     };
-    // Rebuilt when the overlay changes axis: a series' price scale is fixed at
-    // creation in lightweight-charts, so there is nothing to applyOptions. The
-    // cost is a lost zoom on a deliberate, infrequent toggle; the data effects
-    // below repopulate every series immediately.
-  }, [compareScale]);
+    // Rebuilt when the overlay changes axis, and when a comparison starts or
+    // stops: a series' price scale is fixed at creation in lightweight-charts
+    // and a pane cannot be added to a live chart without one, so there is
+    // nothing to applyOptions in either case. The cost is a lost zoom on a
+    // deliberate, infrequent toggle; the data effects below repopulate every
+    // series immediately.
+  }, [compareScale, comparing]);
+
+  /**
+   * The cohort, sanitised once: ascending, unique, finite.
+   *
+   * A memo rather than three passes inside the draw effect, because three
+   * consumers now need the SAME rows — the median line, the hi/lo band, and the
+   * vs-median difference. Sorting each separately would be three chances to
+   * disagree about which minutes survived, and a difference computed off a
+   * different subset from the line it is differencing is a plot of nothing.
+   *
+   * Ascending-and-unique is a hard requirement the library throws over, and a
+   * throw here takes the whole chart down rather than dropping a point.
+   */
+  const cohort = useMemo(
+    () => (compare?.data ?? [])
+      .filter((p) => Number.isFinite(p.time) && Number.isFinite(p.value))
+      .sort((a, b) => a.time - b.time)
+      .filter((p, i, all) => i === 0 || p.time > all[i - 1].time),
+    [compare],
+  );
 
   const aggregated = useMemo(() => {
     const step = Number(interval);
@@ -437,6 +587,60 @@ function StraddleChartImpl({
       spot: lineData(points, (p) => p.spot, step),
     };
   }, [points, interval]);
+
+  /**
+   * Today minus the median, minute by minute.
+   *
+   * Joined on the candle's own bucket time rather than by index: the cohort is
+   * one value a minute for the whole session, today's walk stops at the last
+   * tick, and after a roll the two can differ by which minutes exist at all.
+   * Only minutes BOTH sides have are plotted — an extrapolated difference is
+   * the one number on this chart nobody should be reading.
+   *
+   * `close` rather than the bar's mean or its extreme: the median is a
+   * per-minute snapshot, so the closing quote is the comparable quantity, and
+   * it is the same value the crosshair readout differences.
+   */
+  const vsMedian = useMemo(() => {
+    if (!cohort.length || !aggregated.candles.length) return [];
+    const closes = new Map(aggregated.candles.map((c) => [Number(c.time), c.close]));
+    const out: Array<{ time: number; diff: number; pct: number | null }> = [];
+    for (const p of cohort) {
+      const close = closes.get(p.time);
+      if (close === undefined) continue;
+      out.push({
+        time: p.time,
+        diff: close - p.value,
+        pct: p.value !== 0 ? ((close - p.value) / p.value) * 100 : null,
+      });
+    }
+    return out;
+  }, [cohort, aggregated.candles]);
+
+  /**
+   * Where the straddle stands against the median RIGHT NOW, for the toolbar.
+   *
+   * The crosshair already answers this per bar, but only while the pointer is
+   * on the plot — so the state a reader most wants ("is this session cheap?")
+   * was the one thing they had to hover to learn, and it vanished the moment
+   * they looked away. This is the last bar both series share, which on a live
+   * session is the current minute.
+   */
+  const stance = useMemo(() => {
+    const last = vsMedian[vsMedian.length - 1];
+    if (!last || !Number.isFinite(last.diff)) return null;
+    return {
+      diff: last.diff,
+      pct: last.pct,
+      // Flat is its own outcome and gets neither word: a straddle sitting ON
+      // the median is the least interesting thing it can do, and calling it
+      // cheap because the difference is -0.01 is noise dressed as a signal.
+      label: last.diff < 0 ? 'below median' : last.diff > 0 ? 'above median' : 'at median',
+      // The one-word form the chip shows, and the same word the crossing
+      // markers print on the plot — one vocabulary for one claim.
+      word: last.diff < 0 ? 'cheap' : last.diff > 0 ? 'rich' : 'flat',
+    };
+  }, [vsMedian]);
 
   /**
    * What the last render drew, so growth can be told from replacement.
@@ -493,29 +697,18 @@ function StraddleChartImpl({
     series.iv.setData(aggregated.iv);
     series.sf.setData(aggregated.sf);
     series.spot.setData(aggregated.spot);
-    /*
-     * Median, low and high are sanitised through ONE ordered pass and then split
-     * three ways.
-     *
-     * Ascending-and-unique is a hard requirement the library throws over, and a
-     * throw here takes the whole chart down rather than dropping a point. Sorting
-     * each of the three separately would be three chances to disagree about which
-     * minutes survived — and a band whose edges are sampled at different minutes
-     * from the line inside it is worse than no band.
-     */
-    const band = (compare?.data ?? [])
-      .filter((p) => Number.isFinite(p.time) && Number.isFinite(p.value))
-      .sort((a, b) => a.time - b.time)
-      .filter((p, i, all) => i === 0 || p.time > all[i - 1].time);
-
-    series.compare.setData(band.map((p) => ({ time: stamp(p.time), value: p.value })));
+    // All three from `cohort`, which is already ordered and de-duplicated.
+    series.compare.setData(cohort.map((p) => ({ time: stamp(p.time), value: p.value })));
     // `lo`/`hi` can be absent on a projection built before they existed; a NaN
     // reaching setData is a throw, so they are filtered rather than coerced.
     series.compareLo.setData(
-      band.filter((p) => Number.isFinite(p.lo)).map((p) => ({ time: stamp(p.time), value: p.lo })),
+      cohort.filter((p) => Number.isFinite(p.lo)).map((p) => ({ time: stamp(p.time), value: p.lo })),
     );
     series.compareHi.setData(
-      band.filter((p) => Number.isFinite(p.hi)).map((p) => ({ time: stamp(p.time), value: p.hi })),
+      cohort.filter((p) => Number.isFinite(p.hi)).map((p) => ({ time: stamp(p.time), value: p.hi })),
+    );
+    series.vs?.setData(
+      vsMedian.map((p): BaselineData<Time> => ({ time: stamp(p.time), value: p.diff })),
     );
 
     /**
@@ -557,6 +750,69 @@ function StraddleChartImpl({
         text: label ? `roll → ${Math.round(event.toStrike as number)}` : '',
       });
     }
+    /**
+     * Where the straddle CROSSED the median.
+     *
+     * The vs-median pane shows the crossings as the moment its fill changes
+     * colour, but a reader watching the candles should not have to look down to
+     * find out that the thing they are watching just went from rich to cheap.
+     * These are the same events, marked on the series they are about.
+     *
+     * Only the crossings, never the state: a marker on every below-median bar
+     * would be a solid line of arrows under half the session, which says
+     * nothing the fill does not already say and hides the candles while saying
+     * it. A cross is an event, and events are what markers are for.
+     */
+    if (visible.compare !== false) {
+      /*
+       * A crossing counts only once the new side HOLDS.
+       *
+       * A straddle tracking its median sits on the line for whole stretches of
+       * the session and flips sign on rounding — the same problem `settledRolls`
+       * solves for strike rolls, and the same fix: the next `CROSS_DWELL` bars
+       * must agree, or it was noise rather than a change of state. Without it a
+       * quiet hour prints forty arrows and the two crossings that mattered are
+       * lost among them.
+       */
+      const CROSS_DWELL = 3;
+      let lastCrossLabel = -Infinity;
+      for (let i = 1; i < vsMedian.length; i += 1) {
+        const previous = vsMedian[i - 1].diff;
+        const current = vsMedian[i].diff;
+        if (previous === 0 || current === 0) continue;
+        const cheap = current < 0;
+        if ((previous < 0) === cheap) continue;
+
+        let held = true;
+        for (let j = i + 1; j < Math.min(i + CROSS_DWELL, vsMedian.length); j += 1) {
+          if ((vsMedian[j].diff < 0) !== cheap) { held = false; break; }
+        }
+        if (!held) continue;
+
+        const bucket = bucketOf(vsMedian[i].time * 1000, step);
+        const bar = index.get(bucket);
+        if (bar === undefined) continue;
+
+        // Captions rationed on the same gap the roll labels use, for the same
+        // reason: the library does not collision-test marker text.
+        const label = !dense && bar - lastCrossLabel >= labelGap;
+        if (label) lastCrossLabel = bar;
+
+        markers.push({
+          time: stamp(bucket),
+          // Below the bar for a drop through the median, above for a rise
+          // through it, so the marker sits on the side the price went.
+          position: cheap ? 'belowBar' : 'aboveBar',
+          color: cheap ? base.theme.down : base.theme.up,
+          shape: cheap ? 'arrowDown' : 'arrowUp',
+          text: label ? (cheap ? 'cheap' : 'rich') : '',
+        });
+      }
+    }
+
+    // The library requires markers in ascending time, and rolls and crossings
+    // are two independently ordered streams.
+    markers.sort((a, b) => Number(a.time) - Number(b.time));
     markersRef.current?.setMarkers(markers);
 
     /*
@@ -595,7 +851,7 @@ function StraddleChartImpl({
       interval,
       count: aggregated.candles.length,
     };
-  }, [aggregated, rollEvents, interval, dense, compare]);
+  }, [aggregated, rollEvents, interval, dense, cohort, vsMedian, visible.compare]);
 
   /**
    * Turning a comparison on moves the chart to 1m.
@@ -624,9 +880,13 @@ function StraddleChartImpl({
     // "band without its median", which is a chart of two edges around nothing.
     series.compareLo.applyOptions({ visible: showCompare && visible.compareBand !== false });
     series.compareHi.applyOptions({ visible: showCompare && visible.compareBand !== false });
+    // The difference is the same claim as the overlay, so it hides with it —
+    // but the PANE stays, because removing it would resize every pane above
+    // and the toggle is meant to quiet the chart, not rebuild it.
+    series.vs?.applyOptions({ visible: showCompare });
     // An axis with nothing on it is a column of stale numbers. IV owns the left
     // scale alone, so hiding the line has to hide the scale with it.
-    base.chart.priceScale('left', 0).applyOptions({ visible: visible.iv });
+    base.chart.priceScale('left', PANE_PREMIUM).applyOptions({ visible: visible.iv });
   }, [visible, compare]);
 
   const toggle = useCallback((key: string) => {
@@ -636,8 +896,6 @@ function StraddleChartImpl({
   const fit = useCallback(() => {
     if (baseRef.current) fitContentPadded(baseRef.current.chart);
   }, []);
-
-  const comparing = Boolean(compare);
 
   return (
     <ChartFrame
@@ -665,11 +923,66 @@ function StraddleChartImpl({
               onChange={(e) => onCompareChange?.(e.target.value)}
               className={dense ? 'w-32' : 'w-44'}
             />
+            {/*
+              The answer, without hovering.
+
+              Everything else about the comparison is a shape: two lines in
+              pane 0, a filled region in pane 3. Both are read by eye and both
+              need a glance. This is the one-line conclusion — which side of the
+              median the straddle is on right now, by how much, and in percent —
+              and it is the first thing anyone opens this comparison to find
+              out. It stays on screen because a reading that requires a hover is
+              a reading most sessions never get.
+
+              Tinted with `toneFor`, the same function that colours the signed
+              figure in the readout and the same sign convention the vs-median
+              pane fills with, so the chip, the pane and the readout cannot tell
+              three different stories.
+            */}
+            {stance ? (
+              <span
+                className="qs-num flex shrink-0 items-center gap-1 rounded-[var(--radius-xs)] px-1.5 py-0.5 text-[length:var(--type-micro)] leading-none"
+                style={{
+                  color: toneFor(stance.diff),
+                  // Tint only — no border. A bordered pill is two more pixels of
+                  // height on a row whose height comes straight out of the plot,
+                  // and the tint plus the direction colour already separate this
+                  // from the text beside it.
+                  // `color-mix` over the token rather than `alphaOf`, because
+                  // this is DOM — the resolved literals exist for the canvas.
+                  backgroundColor: 'color-mix(in srgb, ' + toneFor(stance.diff)
+                    + ' 14%, transparent)',
+                }}
+                title={'Straddle ' + stance.label + ' at the last shared minute'}
+              >
+                {/* The short word, matching what the crossing markers say on the
+                    plot. The full phrase is in the tooltip: two words of
+                    toolbar buy nothing that the colour and the sign do not
+                    already carry. */}
+                <span className="uppercase tracking-[var(--tracking-wide)]">{stance.word}</span>
+                <span>
+                  {stance.diff > 0 ? '+' : ''}
+                  {stance.diff.toFixed(2)}
+                  {stance.pct !== null
+                    ? ' (' + (stance.pct > 0 ? '+' : '') + stance.pct.toFixed(1) + '%)'
+                    : ''}
+                </span>
+              </span>
+            ) : null}
             {/* What the overlay IS, next to the control that turned it on. A
                 median of five rebased sessions is not self-evident from a line,
                 and the sample count is what says whether to trust it. */}
             {compareNote && !dense ? (
-              <span className="text-[length:var(--type-micro)] text-[var(--text-tertiary)]">
+              // `basis-0` is what keeps the toolbar one row high. A flex item
+              // is placed on a line at its CONTENT width and only shrinks once
+              // it is on one — so this sentence, which runs to about sixty
+              // characters, was wrapping the whole toolbar and taking 40px out
+              // of the plot to do it. At a zero base it claims only the room
+              // left over and truncates into it.
+              <span
+                className="min-w-0 flex-1 basis-0 truncate text-[length:var(--type-micro)] text-[var(--text-tertiary)]"
+                title={compareNote}
+              >
                 {compareNote}
               </span>
             ) : null}
@@ -719,7 +1032,15 @@ function StraddleChartImpl({
                 {finite(readout.vsCompare) ? (
                   <span className="qs-num shrink-0" style={{ color: toneFor(readout.vsCompare) }}>
                     {readout.vsCompare > 0 ? '+' : ''}
-                    {readout.vsCompare.toFixed(2)} vs median
+                    {readout.vsCompare.toFixed(2)}
+                    {/* The percentage rides along because the rupee figure alone
+                        is not comparable between contracts, or between the front
+                        expiry and the next one on the same underlying. */}
+                    {finite(readout.vsComparePct)
+                      ? ' (' + (readout.vsComparePct > 0 ? '+' : '')
+                        + readout.vsComparePct.toFixed(1) + '%)'
+                      : ''}{' '}
+                    vs median
                   </span>
                 ) : null}
                 {/* The spread the median came out of. Without it a median of

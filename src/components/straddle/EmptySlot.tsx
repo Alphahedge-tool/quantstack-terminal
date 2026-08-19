@@ -36,7 +36,9 @@ export function EmptySlot({
   return (
     <div
       className={cn(
-        'flex flex-col items-center justify-center gap-4 p-6',
+        // Fills the pane like a real chart would, so choosing one does not
+        // change the panel's height — `height` is only the floor.
+        'flex min-h-0 flex-1 flex-col items-center justify-center gap-4 p-6',
         className,
       )}
       style={{ minHeight: height }}

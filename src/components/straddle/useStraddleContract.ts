@@ -15,13 +15,17 @@ import { useStraddleExpiries, useStraddleHistory } from '@/hooks/queries';
 import type { StraddlePoint } from '@/schemas/market';
 
 /**
- * Each underlying carries its own exchange. Defaulting everything to NSE — as
- * the backend does when the param is absent — silently asks for a CRUDEOIL
- * contract on the wrong exchange and gets nothing back.
+ * The default underlying and a few quick picks.
+ *
+ * NOT the set of symbols the page can plot — that is whatever the instrument
+ * master carries, searched through `SymbolPicker`. This list survives only as
+ * the seed for a fresh slot and as the fallback exchange for a symbol that
+ * arrived without one (a restored layout, a deep link).
  */
 export const UNDERLYINGS = [
   { value: 'NIFTY', exchange: 'NSE' },
   { value: 'BANKNIFTY', exchange: 'NSE' },
+  { value: 'SENSEX', exchange: 'BSE' },
   { value: 'FINNIFTY', exchange: 'NSE' },
   { value: 'MIDCPNIFTY', exchange: 'NSE' },
   { value: 'CRUDEOIL', exchange: 'MCX' },
@@ -46,6 +50,15 @@ export function todayIST(): string {
   return new Date(Date.now() + 330 * 60_000).toISOString().slice(0, 10);
 }
 
+/**
+ * Last-resort exchange for a symbol that arrived without one.
+ *
+ * A guess, and only ever a guess — it knows the eight names above and answers
+ * NSE for everything else, which is wrong for every BSE and MCX symbol the
+ * picker can now reach. Callers that HAVE an exchange must pass it; this exists
+ * so a caller that genuinely has none still asks for something plausible
+ * instead of nothing.
+ */
 export function exchangeFor(symbol: string): string {
   return UNDERLYINGS.find((u) => u.value === symbol)?.exchange ?? 'NSE';
 }
@@ -193,8 +206,24 @@ export function sessionOpenOf(points: readonly StraddlePoint[]): SessionOpen {
   return open;
 }
 
-export function useStraddleContract(symbol: string, expiryPreference: string, date: string) {
-  const exchange = exchangeFor(symbol);
+/**
+ * `exchange` is a parameter, not a lookup.
+ *
+ * It used to be derived from the symbol through `exchangeFor`, which knew four
+ * NSE indices and three MCX commodities. Every other symbol — SENSEX, BANKEX,
+ * any F&O stock, GOLD — resolved to NSE, and asking NSE for a BSE contract is
+ * not an error anywhere in the stack: the expiry list comes back empty, the
+ * chart draws nothing, and no layer says why. The wall's SENSEX leg was hitting
+ * exactly that. Now the picker supplies the exchange alongside the symbol and
+ * the guess is only a fallback for a caller that has none.
+ */
+export function useStraddleContract(
+  symbol: string,
+  exchangeHint: string,
+  expiryPreference: string,
+  date: string,
+) {
+  const exchange = exchangeHint || exchangeFor(symbol);
 
   const expiries = useStraddleExpiries(symbol, exchange, date);
   const available = useMemo(() => expiries.data?.expiries ?? [], [expiries.data]);

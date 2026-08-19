@@ -32,7 +32,7 @@ import {
   type StraddlePoint,
   type QuoteCursor,
 } from '../analytics/syntheticFuture.js';
-import { impliedVolStraddle, yearsToExpiry, straddleGreeks } from '../analytics/black76.js';
+import { applyModelledVol, type ModelRequest } from '../analytics/volPass.js';
 import { RingBuffer } from './ringBuffer.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -374,15 +374,19 @@ export async function computeRollingStraddle(
   let entryPrice: number | null = null;
   let entryStraddle: number | null = null;
 
-  // Greek session state — baselines for the "vs 9:15" reading, the previous
-  // bar's values so a roll's greek step can be measured, and coverage counters
-  // so the UI can tell a flat vega line from an absent one.
-  let entryVega:  number | null = null;
-  let entryTheta: number | null = null;
-  let prevVega:   number | null = null;
-  let prevTheta:  number | null = null;
-  let greekBars = 0;
-  let modelledGreekBars = 0;
+  /**
+   * Bars the feed could not fully answer, resolved in ONE batch after the walk.
+   *
+   * This used to be an inline Black-76 inversion per bar — ~22k bounded Newton
+   * solves on the same thread that serves every live socket, which is the exact
+   * cost the Go sidecar exists to take. Collecting them makes the work a batch
+   * worth handing across a process boundary, and leaves the walk doing only
+   * what it alone can do: pick the strike.
+   *
+   * The greek baselines and coverage counters moved with it — they depend on
+   * values that do not exist yet at this point in the loop. See `volPass`.
+   */
+  const pending: ModelRequest[] = [];
 
   const spotLen = spotPoints.length;
 
@@ -453,66 +457,55 @@ export async function computeRollingStraddle(
     if (entryPrice === null)   entryPrice   = best.synFuture;
     if (entryStraddle === null) entryStraddle = best.mid;
 
-    // IV from the feed when it has one, otherwise inverted from the straddle
-    // itself. Nubra only publishes iv_bid/iv_ask for about the last three
-    // months, so without this every chart and statistic goes blank the moment a
-    // backtest reaches back past that — even though the prices needed to
-    // recover it are right here. See analytics/black76.ts.
+    // IV from the feed when it has one. Nubra only publishes iv_bid/iv_ask for
+    // about the last three months; everything older is inverted from the
+    // straddle itself, which happens in the batch pass after this loop rather
+    // than here — see `pending` above and analytics/volPass.ts.
     let iv: number | undefined;
     let ivSource: 'feed' | 'black76' | undefined;
 
     if (best.ivMid != null && best.ivMid > 0) {
       iv = best.ivMid;
       ivSource = 'feed';
-    } else {
-      const T = yearsToExpiry(pt.ts, expiry);
-      const sigma = impliedVolStraddle(best.mid, best.synFuture, best.strike, T);
-      if (Number.isFinite(sigma) && sigma > 0) {
-        iv = sigma * 100;
-        ivSource = 'black76';
-      }
-      // NaN means the quote admits no implied vol — typically a stale straddle
-      // printing below |F − K|. Left undefined; inventing a number here would
-      // be indistinguishable from a real one downstream.
     }
 
     // ── Greeks of the straddle actually held at this bar ──────────────────
     //
     // Feed first: these are the broker's own numbers for the exact contracts
-    // being priced, so they carry the smile the model does not. Black-76 fills
-    // in where the feed is silent, which is most of the backtest window — see
-    // straddleGreeks. Vega and theta are taken as a pair from ONE source so a
-    // bar can never mix a fed vega with a modelled theta.
+    // being priced, so they carry the smile the model does not. Vega and theta
+    // are taken as a pair from ONE source so a bar can never mix a fed vega
+    // with a modelled theta. Where the feed is silent — most of any backtest
+    // window — the pass fills them in from the vol it solves for.
     let vega:  number | undefined;
     let theta: number | undefined;
     let delta: number | undefined;
     let gamma: number | undefined;
     let greekSource: 'feed' | 'black76' | undefined;
 
-    if (best.greeks.vega != null || best.greeks.theta != null) {
+    const hasFedGreeks = best.greeks.vega != null || best.greeks.theta != null;
+    if (hasFedGreeks) {
       vega  = best.greeks.vega  ?? undefined;
       theta = best.greeks.theta ?? undefined;
       delta = best.greeks.delta ?? undefined;
       gamma = best.greeks.gamma ?? undefined;
       greekSource = 'feed';
-    } else if (iv != null && iv > 0) {
-      const T = yearsToExpiry(pt.ts, expiry);
-      const g = straddleGreeks(best.synFuture, best.strike, T, iv / 100);
-      if (g) {
-        ({ vega, theta, delta, gamma } = g);
-        greekSource = 'black76';
-      }
     }
 
-    // Session baselines — the "vs 9:15 open" reference every greek line is read
-    // against. Anchored to the first bar that HAD a greek, not to the first bar
-    // of the session: when the feed's greeks start a few bars late, baselining
-    // on an absent value would make the whole day's delta read as zero.
-    if (entryVega  === null && vega  != null) entryVega  = vega;
-    if (entryTheta === null && theta != null) entryTheta = theta;
-
-    if (vega != null || theta != null) greekBars++;
-    if (greekSource === 'black76') modelledGreekBars++;
+    // Queue whatever the feed left short. A bar with a fed vol but no greeks
+    // carries that vol along (`fedIv`) so the pass derives greeks from the
+    // feed's own number instead of solving for a second, slightly different
+    // one.
+    if (iv == null || !hasFedGreeks) {
+      pending.push({
+        index:      points.length,
+        time:       pt.ts,
+        straddle:   best.mid,
+        forward:    best.synFuture,
+        strike:     best.strike,
+        ...(iv != null ? { fedIv: iv } : {}),
+        wantGreeks: !hasFedGreeks,
+      });
+    }
 
     if (isRollEvent) {
       rollEvents.push({
@@ -521,16 +514,14 @@ export async function computeRollingStraddle(
         toStrike:      best.strike,
         synFuture:     best.synFuture,
         straddlePrice: best.mid,
-        // What the roll itself did to the position's greeks. A roll into a
-        // richer strike re-buys vega; one late in the day usually re-buys
-        // theta too. Null when either side of the step had no greek — a jump
-        // measured against an absent value is not a jump.
-        vegaJump:  vega  != null && prevVega  != null ? vega  - prevVega  : null,
-        thetaJump: theta != null && prevTheta != null ? theta - prevTheta : null,
+        // What the roll itself did to the position's greeks — filled in by the
+        // pass, which is the first point at which both sides of the step are
+        // known. A roll into a richer strike re-buys vega; one late in the day
+        // usually re-buys theta too.
+        vegaJump:  null,
+        thetaJump: null,
       });
     }
-    if (vega  != null) prevVega  = vega;
-    if (theta != null) prevTheta = theta;
 
     points.push({
       time:            pt.ts,
@@ -556,6 +547,20 @@ export async function computeRollingStraddle(
   if (!points.length) return { status: false, message: 'No complete straddle points found' };
 
   mark('walk', tWalk);
+
+  /*
+   * Everything the feed did not carry, in one batch.
+   *
+   * Awaited rather than fired and forgotten: the points are the response, and
+   * a chart drawn before its IV line arrived would just be the old blank series
+   * with extra steps. What the await buys is that the solving happens in the Go
+   * sidecar when one is running — off the thread that serves the live sockets.
+   */
+  const tVol = Date.now();
+  const vol = await applyModelledVol(expiry, points, rollEvents, pending);
+  mark('modelledVol', tVol);
+
+  const { entryVega, entryTheta, greekBars, modelledGreekBars } = vol;
   timings.total = Date.now() - t0;
   console.log(
     `[straddle] ${exchange} ${symbol} ${expiry} ${date} @${resolvedInterval} — `
@@ -563,6 +568,7 @@ export async function computeRollingStraddle(
     + `greeks ${points.length ? Math.round((greekBars / points.length) * 100) : 0}%`
     + `${greekBars ? ` (${Math.round((modelledGreekBars / greekBars) * 100)}% modelled)` : ''}, `
     + `concurrency ${ROLLING_CONCURRENCY} | `
+    + `vol ${vol.source}:${vol.solved}/${vol.requested} in ${vol.tookMs}ms | `
     + Object.entries(timings).map(([k, v]) => `${k} ${v}ms`).join(' · '),
   );
 

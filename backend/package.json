@@ -15,6 +15,13 @@
     "verify:trading": "tsx scripts/verifyTrading.ts",
     "verify:session": "tsx scripts/verifySessionRecovery.ts",
     "verify:assistant": "tsx scripts/verifyAssistant.ts",
+    "verify:go": "tsx scripts/verifyGo.ts",
+    "verify:fields": "tsx scripts/probeFields.ts",
+    "verify:oi": "tsx scripts/probeOi.ts",
+    "verify:series": "tsx scripts/probeSeriesOi.ts",
+    "go:dev": "cd ../backend-go && go run ./cmd/computed",
+    "go:build": "cd ../backend-go && go build -o ../backend/bin/computed.exe ./cmd/computed",
+    "go:test": "cd ../backend-go && go test ./...",
     "verify": "npm run verify:feeds && npm run verify:decoders && npm run verify:trading && npm run verify:instruments && npm run verify:session && npm run verify:assistant"
   },
   "dependencies": {

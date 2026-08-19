@@ -534,6 +534,7 @@ export class NubraFeed implements MarketDataFeed {
         fallbackAliases: fallback,
         session,
         greeks: req.greeks,
+        extras: req.extras,
       });
 
       const series = new Map<string, OptionSeries>();

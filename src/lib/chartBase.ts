@@ -286,6 +286,21 @@ export function createBaseChart(host: HTMLElement, options: BaseChartOptions): B
     handleScale: { axisPressedMouseMove: true, mouseWheel: true, pinch: true },
   });
 
+  /*
+   * Every pane is created HERE, before anything is drawn into it.
+   *
+   * A chart starts with pane 0 and grows one only when a series names it, so
+   * `chart.panes()[1]` is undefined at construction — which silently skipped the
+   * caption and the stretch factor for every pane past the first. The panes then
+   * appeared later, from `addSeries(..., 1)`, at the library's default even
+   * split: the straddle chart asked for 3:1 and got 1:1, and its second pane
+   * has never carried the caption this file promises.
+   *
+   * `addPane(true)` keeps a pane that has no series yet, which is exactly the
+   * state between construction and the first `setData`.
+   */
+  while (chart.panes().length < options.panes.length) chart.addPane(true);
+
   const watermarks = options.panes.map((pane, index) => {
     const api = chart.panes()[index];
     if (!api) return null;

@@ -54,7 +54,14 @@ interface Props {
   meta?: ReactNode;
   onFit: () => void;
 
-  /** A CSS length — see `LayoutSpec.height`. */
+  /**
+   * The FLOOR for the plot, as a CSS length — see `LayoutSpec.minHeight`.
+   *
+   * The frame fills its parent and the canvas takes whatever is left below the
+   * toolbar and the readout, so this is only the height at which the pane stops
+   * shrinking. lightweight-charts is created with `autoSize`, which watches the
+   * host element, so the canvas follows the box without being told a number.
+   */
   height: number | string;
   /**
    * Narrow mode, for a slot in a multi-chart layout.
@@ -80,8 +87,27 @@ export function ChartFrame({
   );
 
   return (
-    <div className={cn('flex flex-col', className)}>
-      <div className="flex flex-wrap items-center gap-2 border-b border-[var(--border-subtle)] px-3 py-2">
+    // `min-h-0` on a flex child is what allows it to be SHORTER than its
+    // content. Without it the toolbar, the readout and the plot's own floor
+    // add up to a minimum the parent cannot override, and the panel grows past
+    // the grid row instead of fitting inside it.
+    <div className={cn('flex min-h-0 flex-1 flex-col', className)}>
+      {/*
+        One row of toolbar, and the plot gets the rest.
+
+        `py-1` rather than `py-2`: the tallest thing on this row is a 32px
+        control, and the padding around it was buying nothing but height at the
+        direct expense of the canvas — which is the only part of a chart panel
+        anyone is looking at.
+
+        Still `flex-wrap`, because a genuinely narrow pane has to degrade to a
+        second line rather than clip its controls. What changed is that nothing
+        on the row can FORCE that wrap any more: the one variable-width item —
+        the compare note — is laid out at a zero base size and truncates (see
+        `leading` in StraddleChart), so the row wraps only when the controls
+        themselves stop fitting.
+      */}
+      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-[var(--border-subtle)] px-3 py-1">
         {leading}
         <SegmentedControl
           value={interval}
@@ -141,8 +167,10 @@ export function ChartFrame({
       </div>
 
       {/* `truncate` and not `flex-wrap` — a second line would resize the plot
-          mid-read. */}
-      <div className="flex h-[22px] shrink-0 items-center gap-x-3 overflow-hidden whitespace-nowrap border-b border-[var(--border-subtle)] px-3 text-[length:var(--type-micro)]">
+          mid-read. 20px is the tightest this row goes while still clearing the
+          descenders on a 10px micro face; below that the figures start looking
+          clipped, which on a row of prices reads as a rendering fault. */}
+      <div className="flex h-5 shrink-0 items-center gap-x-3 overflow-hidden whitespace-nowrap border-b border-[var(--border-subtle)] px-3 text-[length:var(--type-micro)]">
         {readout ?? (
           <span className="flex items-center gap-1 text-[var(--text-tertiary)]">
             <Crosshair size={11} /> Hover for the tick behind a bar
@@ -155,8 +183,8 @@ export function ChartFrame({
           overflowed its container rather than something placed in it. The
           horizontal inset matches the toolbar's `px-3`, so the price axis and
           the interval switch start on one line. */}
-      <div className="px-3 pb-3">
-        <div ref={hostRef} style={{ height }} className="w-full" />
+      <div className="flex min-h-0 flex-1 flex-col px-3 pb-2">
+        <div ref={hostRef} style={{ minHeight: height }} className="min-h-0 w-full flex-1" />
       </div>
     </div>
   );

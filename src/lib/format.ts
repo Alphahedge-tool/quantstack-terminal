@@ -123,9 +123,40 @@ export function relativeTime(ts: number | null | undefined): string {
 /** ISO `2026-08-28` → `28 Aug`, the form used on expiry chips. */
 export function expiryLabel(iso: string | null | undefined): string {
   if (!iso) return EMPTY;
-  const parsed = new Date(`${iso}T00:00:00`);
+  /*
+   * Both shapes the backend uses.
+   *
+   * The straddle routes hand back `2026-08-25`; the chain feed and the expiry
+   * cockpit key on `20260825`, because that is what the instrument master
+   * carries. Parsing only the dashed form did not fail loudly — `new Date` on
+   * the compact one is Invalid Date, the guard below returned the input, and
+   * the cockpit's header quietly read "20260825" as if that were a label.
+   */
+  const raw = iso.replace(/-/g, '');
+  const dashed = raw.length === 8
+    ? `${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)}`
+    : iso;
+  const parsed = new Date(`${dashed}T00:00:00`);
   if (Number.isNaN(parsed.getTime())) return iso;
   return parsed.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
+}
+
+/**
+ * Time left, in the unit a reader actually thinks in.
+ *
+ * "8,170 min to expiry" is arithmetically right and useless — nobody holds five
+ * days in minutes. Minutes are the correct unit only once the number is small
+ * enough to matter minute by minute, which on expiry day is the whole point and
+ * on any other day is noise.
+ */
+export function timeToExpiry(minutes: number | null | undefined): string {
+  if (minutes == null || !Number.isFinite(minutes)) return EMPTY;
+  if (minutes <= 0) return 'expired';
+  if (minutes < 120) return `${Math.round(minutes)} min`;
+  const hours = minutes / 60;
+  if (hours < 24) return `${hours.toFixed(1)} h`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ${Math.round(hours - days * 24)}h`;
 }
 
 /** Compact instrument label, falling back through the fields the backend's

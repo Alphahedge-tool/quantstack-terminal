@@ -52,7 +52,166 @@ src/
     straddle/   LayoutPicker, StraddleSlot, StatStrip, useStraddleContract
   pages/        One per route
   app/          Router and QueryClient
+
+backend/
+  analytics/    black76, syntheticFuture, straddleMetrics — pure maths
+  analytics/volPass.ts   collects every modelled bar and resolves it in ONE
+                         batch, through the Go sidecar or locally
+  lib/computeClient.ts   the sidecar client: opt-in, fail-soft, never throws
+  engine/       the session walk, band greeks, risk reversal
 ```
+
+## The expiry cockpit
+
+`/expiry` is a live view of one expiring contract, built to answer a regime
+question rather than a direction one: **is this session about to go from
+compression to expansion, and once it does, which side?** Almost everything on
+the page serves the first half — direction on expiry day is a much weaker read,
+and giving both equal weight would overstate what the data supports.
+
+```
+backend/analytics/expiryMetrics.ts   pure maths: GEX, gamma flip, walls, regime,
+                                     pressure, OI flow, expected vs realized
+backend/expiry/session.ts            the live store AND the recorder
+backend/routes/expiry.ts             GET /api/expiry/state · /api/expiry/status
+src/pages/ExpiryPage.tsx             tape · strike ladder · the read
+```
+
+### What the feed gives — and one field name that cost a whole feature
+
+Probed one field at a time against `charts/timeseries` — `npm run verify:fields`:
+
+```
+SERVED      l1bid  l1ask  open  high  low  close  iv_bid  iv_ask  iv_mid
+            delta  gamma  vega  theta
+            cumulative_oi  cumulative_volume  tick_volume
+            cumulative_volume_premium  cumulative_volume_delta
+NOT SERVED  oi · open_interest · prev_oi · oi_change · l1bidqty · l1askqty
+            cumulative_call_oi · cumulative_put_oi   (on an OPT query)
+```
+
+The first version of this probe asked for `oi`, `open_interest` and
+`openInterest`, got nothing for all three, and concluded that **open interest
+has no history** — so walls, migration and every gamma figure could only ever be
+live. That was wrong. The documented field is **`cumulative_oi`**, it is served,
+and an unrecognised name returns exactly the same silence as a missing field.
+
+Measured, once the right name was used:
+
+| | |
+|---|---|
+| per-contract OI, one session | 376 one-minute points, 363 distinct values |
+| NIFTY 23950 CE, 2026-08-19 | 64,220 at the open → 420,875 at the close |
+| reach at 1m | **at least 180 days** (probe each date with a contract alive *on* that date — today's weekly has no history before it was listed) |
+| feed `gamma` reach | roughly a month; older sessions fall back to Black-76 |
+
+### Replaying a past session
+
+`GET /api/expiry/replay?symbol=&exchange=&date=` rebuilds the entire cockpit for
+a day that has already happened — same metrics, same panels, from history. The
+date picker on `/expiry` switches between live and replay.
+
+```
+NIFTY 2026-08-12 · 82 contracts · 376 bars · 1.4s
+  09:15  fwd 24501.8  straddle 279.40  IV 10.94%  flip 24865  call wall 25000
+  15:30  fwd 24447.5  straddle 244.55  IV  9.76%  flip 24625  call wall 24500
+  put wall migrated 24300 → 24000
+```
+
+Two deliberate differences from the live path, both stated in the UI:
+
+* **Spot is the synthetic forward** (`K + CE − PE` at the ATM), not the index.
+  It is already in the option prices, needs no second fetch, and is the correct
+  input for gamma and for the flip anyway.
+* **Gamma falls back to Black-76** where the feed has none, using the vol
+  inverted from the ATM straddle. The response's `gammaSource` says which —
+  `feed`, `black76`, or `mixed`.
+
+### The recorder
+
+Still running, for the two things history cannot give: **resolution** (the
+socket publishes ~1/s, history's finest useful option interval is 1m) and **what
+the feed said at the time** (vendors restate history; a bar written down as it
+arrived is evidence). Each minute bar, with the full strike ladder, appends to
+`backend/cache/expiry/{EXCHANGE}_{SYMBOL}_{EXPIRY}_{DATE}.jsonl`.
+`GET /api/expiry/status` reports what is being recorded.
+
+### Two things to read sceptically
+
+**The GEX sign** is the US dealer-long convention — calls positive, puts
+negative — which is not obviously right on NIFTY, where much of the option
+supply is retail writing both wings. What the page actually uses is the *shape*:
+where net GEX crosses zero, and which side of it spot is on. A global sign flip
+leaves that unchanged.
+
+**The pressure score** normalises each component against a fixed scale, not
+against this contract's own history — that history is what the recorder is
+building. Until then the level is indicative and the *change* is the signal.
+
+## The Go compute sidecar
+
+`backend-go/` is a second process that owns one thing: numeric work that runs in
+a loop over bars. Node keeps every route, every broker session, every credential
+and the whole assistant — see the module ledger in the migration plan for which
+side each directory sits on.
+
+```
+backend-go/
+  black76/          Black-76 pricer, IV inverter, greeks — a port of
+                    backend/analytics/black76.ts, which remains the spec
+  chain/            strike selection and the synthetic forward
+  cmd/computed/     the HTTP service: batch endpoints, fan-out across cores
+```
+
+```bash
+npm run go:test          # Go unit tests (round-trip, refusals, greek units)
+npm run go:dev           # run the sidecar on 127.0.0.1:3151
+npm run verify:go        # parity: Go against the TypeScript, 5,600 cases
+QT_GO_COMPUTE=1 npm run dev    # make the backend actually use it
+```
+
+### It is off by default, and that is a measurement not a hedge
+
+Measured on this machine, 22,000 bars of inversion plus greeks:
+
+| | time |
+|---|---|
+| TypeScript, in process | 45 ms |
+| Go compute alone | 3 ms |
+| Go including the HTTP round trip | 127 ms |
+
+The maths is 15× faster in Go and the round trip is 3× slower than not making
+it. That is not a defect in the sidecar — it is what it looks like when the
+work was never the bottleneck. A cold session walk is ~14.8 s, of which
+`optionSeries` (waiting on the broker) is ~13.4 s and the whole vol pass is
+under 10 ms.
+
+So `QT_GO_COMPUTE=1` is worth turning on when you want to keep that CPU off the
+event loop — it is the thread serving every live socket — and not for
+throughput. The sidecar earns its keep properly at stage 2, when the walk and
+its data both move across and nothing has to be serialised back.
+
+### The parity gate
+
+`npm run verify:go` runs both implementations over the same 5,613 cases — a
+grid, a seeded random sweep, and the edge cases the guards exist for — and
+requires agreement to 1e-9, with refusals matching **exactly**. A bar one side
+calls unsolvable and the other answers is a failure whatever the number is.
+
+End to end, the two paths were diffed on real sessions through
+`/api/straddle/history`:
+
+* NIFTY 2026-08-20 (feed greeks, 22,500 points) — **byte-identical**, 351 roll
+  events identical.
+* CRUDEOIL 2026-03-10 (100% modelled greeks, 870 points) — identical to 1.8e-15
+  relative, i.e. one or two ulp of double-precision noise out of the Newton
+  iteration. All 266 roll events at the same times and strikes.
+
+### If the sidecar is down
+
+Nothing happens. `lib/computeClient.ts` probes once, times out fast, and any
+failure takes the sidecar out of rotation for 60 s — callers get `null` and run
+the TypeScript path, which is the same maths and is what runs by default anyway.
 
 ## The design system
 

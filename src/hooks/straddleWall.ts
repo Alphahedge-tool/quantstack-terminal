@@ -64,7 +64,10 @@ export interface WallLeg {
 
 /** One leg: contract resolution, history, live merge, session baseline. */
 function useWallLeg(symbol: string, exchange: string, date: string): WallLeg {
-  const { expiry, history, points: walked } = useStraddleContract(symbol, '', date);
+  // The exchange is PASSED, not looked up: `exchangeFor` answers NSE for
+  // SENSEX, and asking NSE for a BSE contract returns an empty expiry list and
+  // an empty chart with no error to show for it.
+  const { expiry, history, points: walked } = useStraddleContract(symbol, exchange, '', date);
 
   const walkedDate = history.data?.date ?? '';
   const isToday = Boolean(walkedDate) && walkedDate === todayIST();

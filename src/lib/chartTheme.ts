@@ -42,6 +42,12 @@ function token(name: string, fallback: string): string {
  * Grid and border lines want the surface colour at low alpha rather than a
  * solid mid-grey: a solid line at that luminance competes with the marks, and
  * an alpha line composites correctly over whichever pane it lands on.
+ *
+ * Exported as `alphaOf` for the same reason `cssToken` is: a FILL is not a
+ * line. The vs-median pane washes a whole region in the direction colour, and
+ * at full opacity that region would out-shout every stroke on the chart —
+ * including the candles it is describing. Callers reaching for their own
+ * hand-written `rgba(...)` literal is how the palette forks.
  */
 function alpha(hex: string, a: number): string {
   const match = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex.trim());
@@ -49,6 +55,8 @@ function alpha(hex: string, a: number): string {
   const [r, g, b] = match.slice(1).map((h) => parseInt(h, 16));
   return `rgba(${r}, ${g}, ${b}, ${a})`;
 }
+
+export const alphaOf = alpha;
 
 export interface ChartTheme {
   surface: string;

@@ -53,11 +53,13 @@ function istToday(): string {
 let nextSlotId = 1;
 const makeSlot = (
   symbol: string,
+  exchange: string,
   expiry: string,
   kind: ChartKind | null,
 ): SlotConfig => ({
   id: `slot-${nextSlotId++}`,
   symbol,
+  exchange,
   expiry,
   kind,
 });
@@ -114,7 +116,7 @@ function SessionRange({
 
 export function StraddlePage() {
   const [layout, setLayout] = useState<LayoutId>('1');
-  const [slots, setSlots] = useState<SlotConfig[]>([makeSlot('NIFTY', '', 'straddle')]);
+  const [slots, setSlots] = useState<SlotConfig[]>([makeSlot('NIFTY', 'NSE', '', 'straddle')]);
   const [focusedId, setFocusedId] = useState<string>(() => slots[0].id);
 
   /**
@@ -156,7 +158,9 @@ export function StraddlePage() {
        */
       const grown = [...current];
       const seed = current[current.length - 1];
-      while (grown.length < target.slots) grown.push(makeSlot(seed.symbol, seed.expiry, null));
+      while (grown.length < target.slots) {
+        grown.push(makeSlot(seed.symbol, seed.exchange, seed.expiry, null));
+      }
       return grown;
     });
   }, []);
@@ -178,7 +182,7 @@ export function StraddlePage() {
    * alternative, aggregating all four slots into one strip, would produce
    * numbers true of no contract on screen.
    */
-  const summary = useStraddleContract(focused.symbol, focused.expiry, date);
+  const summary = useStraddleContract(focused.symbol, focused.exchange, focused.expiry, date);
   const {
     last: walkedLast, history, expiry, rolls: walkedRolls, rawRollCount, exchange, open,
   } = summary;
@@ -376,12 +380,26 @@ export function StraddlePage() {
   );
 
   return (
-    <>
+    /*
+     * A full-height column, not a document that happens to be about this tall.
+     *
+     * The chart used to be sized by arithmetic — `100dvh` minus a hand-counted
+     * 294px of chrome — which meant every pixel of that estimate had to be
+     * padded to stay safe, and the padding was height the plot never got. Here
+     * the header takes what it needs, the grid takes the rest, and the browser
+     * does the measuring. Add a banner or shrink the toolbar and the plot
+     * adjusts on its own.
+     *
+     * `h-full` resolves against `main`, which is a fixed-height flex child of
+     * the shell — so this is the viewport minus the top and status bars, with
+     * no scrollbar unless a pane hits its floor.
+     */
+    <div className="flex h-full min-h-0 flex-col">
       {/* On wide screens this becomes a single quote rail: identity, market
           context, and controls share one 64px command deck. Below 2xl it falls
           back to the compact two-row header so nothing becomes unreadably
           narrow just to preserve the effect. */}
-      <section className="qs-container relative isolate mb-[var(--container-gap)] overflow-hidden 2xl:h-16 before:pointer-events-none before:absolute before:inset-x-8 before:top-0 before:z-10 before:h-px before:bg-[linear-gradient(90deg,transparent,var(--accent-info),transparent)] before:opacity-60">
+      <section className="qs-container relative isolate mb-[var(--container-gap)] shrink-0 overflow-hidden 2xl:h-16 before:pointer-events-none before:absolute before:inset-x-8 before:top-0 before:z-10 before:h-px before:bg-[linear-gradient(90deg,transparent,var(--accent-info),transparent)] before:opacity-60">
         <div className="flex min-h-9 flex-wrap items-center gap-x-3 gap-y-1 bg-[var(--container-head)] px-3 py-1.5 [background-image:var(--elevation-header)] lg:h-9 lg:flex-nowrap lg:py-0 2xl:grid 2xl:h-full 2xl:min-h-0 2xl:grid-cols-[12.5rem_minmax(0,1fr)_auto] 2xl:gap-0 2xl:divide-x 2xl:divide-[var(--container-rule)] 2xl:bg-transparent 2xl:p-0 2xl:[background-image:none]">
           <div className="flex min-w-0 flex-1 items-baseline gap-3 2xl:h-full 2xl:flex-col 2xl:items-start 2xl:justify-center 2xl:gap-0.5 2xl:bg-[var(--container-head)] 2xl:px-3 2xl:[background-image:var(--elevation-header)]">
             <h1 className="shrink-0 text-[length:var(--type-title)] font-semibold leading-tight tracking-[var(--tracking-tight)] text-[var(--text-primary)] 2xl:text-[length:var(--type-control)]">
@@ -526,7 +544,7 @@ export function StraddlePage() {
         // one because vol did not move, and coverage is the only thing that
         // tells them apart — but a green "100%" badge on every chart in a grid
         // of four is four pieces of furniture saying nothing happened.
-        <div className="qs-container mb-[var(--container-gap)] flex flex-wrap items-center gap-2 px-3 py-2">
+        <div className="qs-container mb-[var(--container-gap)] flex shrink-0 flex-wrap items-center gap-2 px-3 py-2">
           {/* The number in the badge, the sentence beside it — Badge is
               uppercase and nowrap by design, which is right for a token and
               wrong for prose. */}
@@ -540,13 +558,16 @@ export function StraddlePage() {
         </div>
       ) : null}
 
-      <div className={`grid gap-[var(--container-gap)] ${spec.className}`}>
+      {/* `min-h-0` is what lets this be shorter than its content wants to be —
+          without it the grid grows to fit the panels and the page scrolls,
+          which is exactly the behaviour being replaced. */}
+      <div className={`grid min-h-0 flex-1 gap-[var(--container-gap)] ${spec.className}`}>
         {visible.map((slot) => (
           <StraddleSlot
             key={slot.id}
             slot={slot}
             date={date}
-            height={spec.height}
+            height={spec.minHeight}
             dense={spec.dense}
             focused={slot.id === focused.id}
             // A focus ring on the only chart on screen is noise: there is
@@ -557,6 +578,6 @@ export function StraddlePage() {
           />
         ))}
       </div>
-    </>
+    </div>
   );
 }

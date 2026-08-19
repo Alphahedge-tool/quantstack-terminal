@@ -49,6 +49,21 @@ export interface OptionSeries {
   gamma?: Point[];
   vega?:  Point[];
   theta?: Point[];
+  /**
+   * Open interest and traded volume, when the request asked for them.
+   *
+   * OI is the one field that changes what can be RESEARCHED rather than just
+   * displayed: walls, migration and gamma exposure are all functions of it, and
+   * for a long time this pipeline assumed the feed did not serve it
+   * historically. It does — the field is `cumulative_oi`, and the earlier
+   * conclusion came from probing three plausible names that were all wrong.
+   * Measured reach is at least 180 days at 1-minute resolution.
+   *
+   * Optional and opt-in for the same reason the greeks are: another ~23k points
+   * per contract per session at 1s.
+   */
+  oi?:     Point[];
+  volume?: Point[];
 }
 
 export type UnderlyingKind = 'INDEX' | 'STOCK' | 'COMMODITY' | 'UNKNOWN';
@@ -111,6 +126,9 @@ export interface Capabilities {
 /** The greeks a caller wants fetched. Omitted entirely = none. */
 export type GreekField = 'delta' | 'gamma' | 'vega' | 'theta';
 
+/** Non-greek per-contract series a caller can opt into. */
+export type ExtraField = 'oi' | 'volume';
+
 export interface SeriesRequest {
   keys:     InstrumentKey[];
   interval: string;
@@ -126,6 +144,16 @@ export interface SeriesRequest {
    * full set "just in case" was measurably the slowest thing this pipeline did.
    */
   greeks?:  readonly GreekField[];
+  /**
+   * Non-greek extras — open interest and traded volume.
+   *
+   * Separate from `greeks` because they are not sensitivities and not all of
+   * them share the greeks' availability window: on this feed OI reaches back
+   * months further than gamma does, so a caller that wants a historical OI
+   * ladder must be able to ask for OI WITHOUT asking for greeks it will not
+   * get.
+   */
+  extras?:  readonly ExtraField[];
 }
 
 export interface CandleRequest {

@@ -23,7 +23,8 @@ import { StraddleChart } from '@/components/chart/StraddleChart';
 import { GreeksChart } from '@/components/chart/GreeksChart';
 import { SkewChart } from '@/components/chart/SkewChart';
 import { X } from 'lucide-react';
-import { UNDERLYINGS, todayIST, useStraddleContract } from './useStraddleContract';
+import { todayIST, useStraddleContract } from './useStraddleContract';
+import { SymbolPicker } from './SymbolPicker';
 import { useBandGreeks, useRiskReversal } from '@/hooks/queries';
 import { useDteMedian } from '@/hooks/dteMedian';
 import { useLiveStraddle } from '@/hooks/useLiveStraddle';
@@ -38,6 +39,14 @@ import { cn } from '@/lib/cn';
 export interface SlotConfig {
   id: string;
   symbol: string;
+  /**
+   * The exchange the symbol was picked ON, carried rather than derived.
+   *
+   * SENSEX exists on BSE and not on NSE, CRUDEOIL on MCX and not on NSE, and
+   * asking the wrong one is a silent empty chart rather than an error — see
+   * `SymbolPicker`. The picker sets both fields in one update for that reason.
+   */
+  exchange: string;
   /** The user's preference. The expiry actually in force is resolved against
    *  the live list — see `useStraddleContract`. */
   expiry: string;
@@ -48,7 +57,8 @@ export interface SlotConfig {
 interface Props {
   slot: SlotConfig;
   date: string;
-  /** A CSS length — see `LayoutSpec.height`. */
+  /** The plot's floor — see `LayoutSpec.minHeight`. The pane itself fills its
+   *  grid row. */
   height: string;
   dense: boolean;
   /** Focus drives the page's stat strip. Only meaningful past one slot. */
@@ -64,7 +74,7 @@ export function StraddleSlot({
   const {
     available, expiry, expiries, history,
     points: walked, rolls: walkedRolls, exchange,
-  } = useStraddleContract(slot.symbol, slot.expiry, date);
+  } = useStraddleContract(slot.symbol, slot.exchange, slot.expiry, date);
 
   /**
    * The live feed, but only for the session that is actually today.
@@ -290,14 +300,16 @@ export function StraddleSlot({
             onChange={(e) => onChange({ kind: e.target.value as ChartKind })}
             className={dense ? 'w-32' : 'w-40'}
           />
-          <Select
-            aria-label="Underlying"
-            value={slot.symbol}
-            options={UNDERLYINGS.map((u) => ({ value: u.value, label: `${u.value} · ${u.exchange}` }))}
+          <SymbolPicker
+            symbol={slot.symbol}
+            exchange={exchange}
+            dense={dense}
             // Clearing the expiry is not optional: the old one belongs to the
-            // old underlying and names a contract that does not exist.
-            onChange={(e) => onChange({ symbol: e.target.value, expiry: '' })}
-            className={dense ? 'w-28' : 'w-36'}
+            // old underlying and names a contract that does not exist. The
+            // exchange moves with the symbol for the same reason — a symbol
+            // kept against the previous underlying's exchange resolves to
+            // nothing at all.
+            onChange={(pick) => onChange({ ...pick, expiry: '' })}
           />
           <Select
             aria-label="Expiry"
@@ -332,7 +344,9 @@ export function StraddleSlot({
     <Panel
       flush
       className={cn(
-        'transition-shadow duration-100',
+        // Fills its grid row, and `min-h-0` lets it be shorter than the sum of
+        // its children — see ChartFrame.
+        'h-full min-h-0 transition-shadow duration-100',
         // A ring, not a border: a border would change the panel's box and shift
         // every neighbour by a pixel each time focus moved.
         showFocus && focused && 'ring-1 ring-[var(--accent-info)]',
@@ -340,7 +354,7 @@ export function StraddleSlot({
     >
       {/* Focus follows a click anywhere in the slot, including on the chart —
           which is why this is a wrapper and not a handler on the header. */}
-      <div onPointerDownCapture={onFocus} className="flex min-h-0 flex-col">
+      <div onPointerDownCapture={onFocus} className="flex min-h-0 flex-1 flex-col">
         <PanelHeader
           // Always dense, not only in the small layouts. Even at one chart this
           // header is a caption on the plot, not a section heading.
@@ -365,8 +379,8 @@ export function StraddleSlot({
         {!slot.kind ? (
           <EmptySlot height={height} onPick={(kind) => onChange({ kind })} />
         ) : query.isLoading ? (
-          <div className="relative p-4">
-            <div className="qs-skeleton" style={{ height }} />
+          <div className="relative flex min-h-0 flex-1 flex-col p-4">
+            <div className="qs-skeleton min-h-0 flex-1" style={{ minHeight: height }} />
             {/* A cold contract walks the whole session across every strike the
                 spot visited. Say so, or a correct-but-slow first load reads as
                 a hang. */}
@@ -377,11 +391,14 @@ export function StraddleSlot({
             </p>
           </div>
         ) : query.error ? (
-          <div className="p-4">
+          // The state fills the pane like the chart it replaces — a message
+          // pinned to the top of an otherwise empty panel reads as a broken
+          // layout rather than as a state.
+          <div className="flex min-h-0 flex-1 flex-col justify-center p-4">
             <ErrorState error={query.error} onRetry={() => query.refetch()} />
           </div>
         ) : rows.length === 0 ? (
-          <div className="p-4">
+          <div className="flex min-h-0 flex-1 flex-col justify-center p-4">
             <EmptyState
               title="Nothing recorded"
               hint={
@@ -399,7 +416,7 @@ export function StraddleSlot({
           /* Scrolls inside the slot's own height rather than growing it — a
              375-row table that lengthened the pane would push every other slot
              off the page the moment the comparison was switched on. */
-          <div className="min-h-0 overflow-auto" style={{ height }}>
+          <div className="min-h-0 flex-1 overflow-auto" style={{ minHeight: height }}>
             <DteMedianTable
               profile={scaledProfile}
               sessions={dteMedian.sessions}

@@ -41,4 +41,10 @@ rr.txt
 .vite
 node_modules/.tmp
 *.tsbuildinfo
+
+# Go build output. `npm run go:build` writes the compiled sidecar here, and a
+# ~10 MB binary in a public repo is both useless to a reader and a nuisance to
+# every later clone — the source next to it rebuilds in under a second.
+backend/bin/
+backend-go/**/*.exe
 .DS_Store

@@ -34,6 +34,36 @@ export const instrumentSearchResponse = z.object({
   instruments: z.array(instrumentSchema).default([]),
 });
 
+/**
+ * One straddle-eligible underlying, as `/api/instruments/search` returns it.
+ *
+ * NOT the same shape as `instrumentSchema` above: that route answers with the
+ * ASSET summary the instrument cache builds (`asset`, `kind`, `lot`, the whole
+ * expiry list), not with one contract row. Parsing it as an `Instrument` is why
+ * the symbol column can come back blank — `symbol` simply is not a field here.
+ *
+ * `kind` decides nothing on its own but is what lets the picker group indices
+ * above stocks above commodities, which is the only way a list of 200 F&O names
+ * stays scannable.
+ */
+export const eligibleAssetSchema = z
+  .object({
+    asset: z.string().default(''),
+    exchange: z.string().default(''),
+    kind: z.string().default(''),
+    lot: z.number().default(0),
+    expiries: z.array(z.string()).default([]),
+  })
+  .passthrough();
+
+export type EligibleAsset = z.infer<typeof eligibleAssetSchema>;
+
+export const eligibleSearchResponse = z.object({
+  status: z.literal(true),
+  count: z.number().default(0),
+  instruments: z.array(eligibleAssetSchema).default([]),
+});
+
 export const expiriesResponse = z.object({
   status: z.literal(true),
   symbol: z.string().default(''),

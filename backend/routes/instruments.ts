@@ -7,7 +7,8 @@
 
 import { route, ApiError } from '../server.js';
 import { activeFeed } from '../feeds/access.js';
-import { searchEligible, cacheStats } from '../lib/instrumentCache.js';
+import { searchEligible, cacheStats, warmExchange } from '../lib/instrumentCache.js';
+import { getSession } from '../lib/sessionStore.js';
 import { latestTradingDate } from '../engine/rollingStraddle.js';
 
 // GET /api/instruments/search?q=&exchange=
@@ -26,8 +27,19 @@ route('GET', '/api/instruments/search', async (_req, _res, { query }) => {
   // allSettled, not all: one exchange being unavailable must not blank the
   // whole search.
   const wanted = exchange ? [exchange] : feed.capabilities.exchanges;
+  const date   = latestTradingDate();
+  const session = getSession();
   await Promise.allSettled(
-    wanted.map((ex) => feed.assets(ex, latestTradingDate())),
+    wanted.map((ex) => (
+      // `feed.assets` only guarantees the exchanges in WARM_EXCHANGES are
+      // loaded, so an exchange outside that list answers "no results" for
+      // symbols that do exist — which is what the symbol picker's search would
+      // report for BSE if the warm list were ever narrowed. `warmExchange`
+      // loads the slot actually being searched; both are no-ops once cached.
+      session
+        ? warmExchange(ex, date, session).catch(() => feed.assets(ex, date))
+        : feed.assets(ex, date)
+    )),
   );
 
   const results = searchEligible(q, exchange, limit);

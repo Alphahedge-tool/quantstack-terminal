@@ -19,6 +19,7 @@ import {
   feedsResponse,
   healthResponse,
   instrumentSearchResponse,
+  eligibleSearchResponse,
   expiriesResponse,
   straddleExpiriesResponse,
   straddleHistoryResponse,
@@ -27,6 +28,7 @@ import {
   type BandGreeks,
   type RiskReversal,
 } from '@/schemas/market';
+import { expiryReplayResponse, expiryStateResponse } from '@/schemas/expiry';
 import { streamResult } from '@/lib/sse';
 
 /**
@@ -47,6 +49,12 @@ export const keys = {
   feeds: ['feeds'] as const,
   instrumentSearch: (q: string, exchange: string) =>
     ['instruments', 'search', q, exchange] as const,
+  eligibleSearch: (q: string, exchange: string) =>
+    ['instruments', 'eligible', q, exchange] as const,
+  expiryState: (symbol: string, exchange: string, expiry: string) =>
+    ['expiry', 'state', symbol, exchange, expiry] as const,
+  expiryReplay: (symbol: string, exchange: string, date: string) =>
+    ['expiry', 'replay', symbol, exchange, date] as const,
   expiries: (symbol: string, exchange: string) =>
     ['instruments', 'expiries', symbol, exchange] as const,
   // `date` is part of both keys. The expiry list for a past session is not the
@@ -218,6 +226,37 @@ export function useInstrumentSearch(query: string, exchange: string) {
   });
 }
 
+/**
+ * Underlyings the straddle engine can actually walk, for the symbol picker.
+ *
+ * Same endpoint as `useInstrumentSearch` but parsed as what it really returns —
+ * an asset summary per underlying, not a contract row (see `eligibleAssetSchema`).
+ * Separate query key for the same reason: the two callers want different shapes
+ * out of one cache entry, and sharing the key would hand whichever ran second a
+ * payload its schema rejects.
+ *
+ * An EMPTY query is allowed here, unlike the instrument search. Opening the
+ * picker with nothing typed has to show something — the exchange's own list,
+ * ranked indices first — or the user is made to guess a symbol before being
+ * told which symbols exist.
+ */
+export function useEligibleSearch(query: string, exchange: string, enabled = true) {
+  const trimmed = query.trim();
+  return useQuery({
+    queryKey: keys.eligibleSearch(trimmed, exchange),
+    queryFn: ({ signal }) =>
+      api.get('/api/instruments/search', eligibleSearchResponse, {
+        query: { q: trimmed, exchange, limit: 100 },
+        signal,
+      }),
+    enabled,
+    // The instrument master is rebuilt once a day; re-searching on every
+    // reopen of the picker is wasted work.
+    staleTime: 5 * 60_000,
+    retry: retryPolicy,
+  });
+}
+
 export function useExpiries(symbol: string, exchange: string) {
   return useQuery({
     queryKey: keys.expiries(symbol, exchange),
@@ -228,6 +267,75 @@ export function useExpiries(symbol: string, exchange: string) {
       }),
     enabled: Boolean(symbol),
     staleTime: 5 * 60_000,
+    retry: retryPolicy,
+  });
+}
+
+/* ── Expiry cockpit ───────────────────────────────────────────────────────── */
+
+/**
+ * The whole cockpit, one endpoint, polled.
+ *
+ * ── Why polling, and why 4s ──
+ *
+ * The backend holds the chain subscription and keeps a minute series; this is a
+ * read of memory. Pushing it over a socket would deliver twenty frames for every
+ * one that changes a number worth acting on, and would need its own reconnect
+ * and backfill for a payload that is a snapshot rather than a series — a missed
+ * frame here costs nothing, because the next one carries the full state.
+ *
+ * 4s is chosen against what the numbers actually do: every rate on the page is
+ * measured over minutes, so a faster poll would redraw the same figures, and a
+ * slower one would let the live straddle and IV visibly lag the tape.
+ *
+ * `refetchIntervalInBackground` is deliberately OFF. A backgrounded tab that
+ * keeps polling holds the chain subscription open on the server for a session
+ * nobody is watching — the store releases it after three idle minutes, which is
+ * exactly what a hidden tab should trigger.
+ */
+export function useExpiryState(symbol: string, exchange: string, expiry = '') {
+  return useQuery({
+    queryKey: keys.expiryState(symbol, exchange, expiry),
+    queryFn: ({ signal }) =>
+      api.get('/api/expiry/state', expiryStateResponse, {
+        query: { symbol, exchange, ...(expiry ? { expiry } : {}) },
+        signal,
+      }),
+    enabled: Boolean(symbol),
+    refetchInterval: 4_000,
+    // A cold chain takes up to 20s to publish its first packet, and the route
+    // answers immediately with `live: false` rather than waiting. Keeping the
+    // previous data means the page does not blank between polls while that
+    // happens.
+    placeholderData: (previous) => previous,
+    retry: retryPolicy,
+  });
+}
+
+/**
+ * The same cockpit over a session that already happened.
+ *
+ * ── Why this is a different query and not a parameter ──
+ *
+ * A replay walks ~82 contracts across a whole session and takes a second or
+ * two; the live state is a read of the server's memory and is polled every
+ * four. Folding them into one query would give the live path a replay's loading
+ * behaviour, or the replay a poll it must not have — re-walking eighty
+ * contracts every four seconds for a day that finished last Tuesday.
+ *
+ * No `refetchInterval` at all: a completed session is immutable. `staleTime` of
+ * an hour so flipping between two dates is instant on the way back.
+ */
+export function useExpiryReplay(symbol: string, exchange: string, date: string) {
+  return useQuery({
+    queryKey: keys.expiryReplay(symbol, exchange, date),
+    queryFn: ({ signal }) =>
+      api.get('/api/expiry/replay', expiryReplayResponse, {
+        query: { symbol, exchange, date },
+        signal,
+      }),
+    enabled: Boolean(symbol && date),
+    staleTime: 60 * 60_000,
     retry: retryPolicy,
   });
 }

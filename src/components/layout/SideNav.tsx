@@ -25,6 +25,7 @@ import {
   Scale,
   Search,
   Wallet,
+  Gauge,
 } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { useUiStore } from '@/stores/uiStore';
@@ -54,6 +55,7 @@ const GROUPS: Array<{ heading: string; items: NavItem[] }> = [
     heading: 'Analytics',
     items: [
       { to: '/straddle', label: 'Straddle', icon: BarChart3 },
+      { to: '/expiry', label: 'Expiry Cockpit', icon: Gauge },
       { to: '/wall', label: 'Straddle Wall', icon: Rows3 },
       { to: '/analysis', label: 'Analysis Sheets', icon: Scale },
       { to: '/instruments', label: 'Instruments', icon: Search },

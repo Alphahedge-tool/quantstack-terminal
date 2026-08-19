@@ -84,6 +84,7 @@ import './routes/ivSurface.js';
 import './routes/brokerAccounts.js';
 import './routes/zerodhaLogin.js';
 import './routes/assistant.js';
+import './routes/expiry.js';
 
 // ── Feeds + server ────────────────────────────────────────────────────────────
 import { feeds } from './feeds/registry.js';
