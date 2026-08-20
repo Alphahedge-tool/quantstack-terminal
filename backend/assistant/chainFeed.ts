@@ -33,6 +33,10 @@ import { getCachedRefdata, todayIST } from '../lib/instrumentCache.js';
 import type { NubraSession } from '../brokers/nubra.js';
 import type { OptionSide } from './types.js';
 
+import { logger } from '../lib/logger.js';
+
+const log = logger('iris/chain');
+
 // ── Shapes ───────────────────────────────────────────────────────────────────
 
 /** One contract's live state. All prices in rupees, IV in percent. */
@@ -244,14 +248,14 @@ function publish(entry: Entry): void {
       listener(snap);
     } catch (err) {
       // One bad consumer must not stop the others from seeing the tick.
-      console.warn(`[iris/chain] listener threw on ${entry.key}: ${(err as Error).message}`);
+      log.warn(`listener threw on ${entry.key}: ${(err as Error).message}`);
     }
   }
 }
 
 function handleEvent(entry: Entry, e: BridgeEvent): void {
   if (e.event === 'error') {
-    console.warn(`[iris/chain] ${entry.key}: ${e.message}`);
+    log.warn(`${entry.key}: ${e.message}`);
     return;
   }
   if (e.event !== 'option') return;
@@ -318,8 +322,8 @@ function spawn(entry: Entry, session: NubraSession, spotSymbol?: string): void {
       // python) would otherwise respawn in a tight loop forever.
       const delay = RESTART_BACKOFF[Math.min(entry.restarts, RESTART_BACKOFF.length - 1)];
       entry.restarts++;
-      console.warn(
-        `[iris/chain] ${entry.key} bridge exited (${code ?? 'signal'}) — retrying in ${delay}ms`,
+      log.warn(
+        `${entry.key} bridge exited (${code ?? 'signal'}) — retrying in ${delay}ms`,
       );
       entry.restartTimer = setTimeout(() => {
         entry.restartTimer = null;

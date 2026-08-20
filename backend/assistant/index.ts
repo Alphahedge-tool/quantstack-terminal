@@ -42,6 +42,10 @@ import {
 } from './tools/watches.js';
 import { startMonitor, reconcileChains, releaseHeld } from './monitor/engine.js';
 
+import { logger } from '../lib/logger.js';
+
+const log = logger('iris');
+
 export { onAlert, recentAlerts, monitorStats } from './monitor/engine.js';
 export { chainStats } from './chainFeed.js';
 
@@ -97,10 +101,10 @@ export function startAssistant(): void {
   const session = getSession();
   if (session) {
     reconcileChains(session).catch((err) =>
-      console.warn(`[iris] could not restore watch subscriptions: ${(err as Error).message}`),
+      log.warn(`could not restore watch subscriptions: ${(err as Error).message}`),
     );
   }
-  console.log(`[iris] ${IRIS_NAME} ready`);
+  log.info(`${IRIS_NAME} ready`);
 }
 
 /** Release everything a disconnecting conversation held. */
@@ -253,7 +257,7 @@ async function dispatch(interp: Interpretation, ctx: Ctx): Promise<Reply> {
       return { ...base, text: err.message, speak: err.message, error: true, awaiting };
     }
     const message = (err as Error)?.message || 'Something went wrong.';
-    console.warn(`[iris] ${intent} failed: ${message}`);
+    log.warn(`${intent} failed: ${message}`);
     return {
       ...base,
       text: `I could not do that: ${message}`,

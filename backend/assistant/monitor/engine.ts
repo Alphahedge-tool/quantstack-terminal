@@ -50,6 +50,10 @@ import {
 } from './watchStore.js';
 import { formatMetric, spokenNumber } from '../format.js';
 
+import { logger } from '../../lib/logger.js';
+
+const log = logger('iris/monitor');
+
 const EVAL_MS = Number(process.env.QT_ASSISTANT_EVAL_MS || 5_000);
 
 /** Alerts retained for "what fired earlier". */
@@ -173,7 +177,7 @@ export async function reconcileChains(session: NubraSession | null): Promise<voi
       else handle.release();          // no longer wanted — undo immediately
     } catch (err) {
       chains.delete(key);
-      console.warn(`[iris/monitor] could not subscribe ${key}: ${(err as Error).message}`);
+      log.warn(`could not subscribe ${key}: ${(err as Error).message}`);
     }
   }
 }
@@ -218,7 +222,7 @@ export async function holdChain(
     else handle.release();
   } catch (err) {
     held.delete(holdKey);
-    console.warn(`[iris/monitor] could not hold ${chainKey}: ${(err as Error).message}`);
+    log.warn(`could not hold ${chainKey}: ${(err as Error).message}`);
   }
 }
 
@@ -451,7 +455,7 @@ function evaluate(): void {
       alert = evaluateOne(w, now);
     } catch (err) {
       // One malformed watch must never stop the rest from being evaluated.
-      console.warn(`[iris/monitor] watch ${w.id} failed: ${(err as Error).message}`);
+      log.warn(`watch ${w.id} failed: ${(err as Error).message}`);
       continue;
     }
     if (!alert) continue;
@@ -472,7 +476,7 @@ export function startMonitor(): void {
   if (timer) return;
   timer = setInterval(evaluate, EVAL_MS);
   timer.unref?.();
-  console.log(`[iris/monitor] evaluating every ${EVAL_MS}ms`);
+  log.info(`evaluating every ${EVAL_MS}ms`);
 }
 
 export function stopMonitor(): void {

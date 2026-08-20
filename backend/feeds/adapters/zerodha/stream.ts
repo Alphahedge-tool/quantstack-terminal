@@ -31,6 +31,10 @@ import { instruments } from '../../../instruments/store.js';
 import { symbolOf, segmentOf } from '../../../instruments/symbol.js';
 import type { ZerodhaSession } from './session.js';
 
+import { logger } from '../../../lib/logger.js';
+
+const log = logger('zerodha/stream');
+
 const TICKER_URL = 'wss://ws.kite.trade';
 
 /** Kite's documented ceiling is 3000 tokens per connection. */
@@ -158,15 +162,15 @@ export class ZerodhaStream {
     }
 
     if (missing.length) {
-      console.warn(
-        `[zerodha/stream] ${missing.length} contract(s) not in Kite's master, skipped: `
+      log.warn(
+        `${missing.length} contract(s) not in Kite's master, skipped: `
         + `${missing.slice(0, 5).join(', ')}${missing.length > 5 ? ' …' : ''}`,
       );
     }
     if (!this.tokens.length) throw new Error('Zerodha carries none of the requested contracts');
 
     if (this.tokens.length > MAX_TOKENS) {
-      console.warn(`[zerodha/stream] ${this.tokens.length} contracts requested; Kite caps at ${MAX_TOKENS}`);
+      log.warn(`${this.tokens.length} contracts requested; Kite caps at ${MAX_TOKENS}`);
       this.tokens = this.tokens.slice(0, MAX_TOKENS);
     }
 
@@ -187,7 +191,7 @@ export class ZerodhaStream {
 
     ws.on('open', () => {
       this.retries = 0;
-      console.log(`[zerodha/stream] connected — ${this.tokens.length} contracts`);
+      log.info(`connected — ${this.tokens.length} contracts`);
       ws.send(JSON.stringify({ a: 'subscribe', v: this.tokens }));
       ws.send(JSON.stringify({ a: 'mode', v: [MODE_FULL, this.tokens] }));
       this.startPing();
@@ -213,7 +217,7 @@ export class ZerodhaStream {
       this.ws = null;
       this.stopPing();
       if (this.closed) return;
-      console.warn(`[zerodha/stream] disconnected (${why}) — reconnecting`);
+      log.warn(`disconnected (${why}) — reconnecting`);
       this.scheduleReconnect();
     };
 

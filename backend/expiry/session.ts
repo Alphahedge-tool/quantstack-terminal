@@ -51,6 +51,10 @@ import {
   type ExpiryBar, type Leg, type Migration, type Pressure, type Regime, type Rung,
 } from '../analytics/expiryMetrics.js';
 
+import { logger } from '../lib/logger.js';
+
+const log = logger('expiry');
+
 /* ── Shape ────────────────────────────────────────────────────────────────── */
 
 export interface ExpiryState {
@@ -299,7 +303,7 @@ function record(entry: Entry, bar: ExpiryBar, ladder: Rung[]): void {
     entry.recorded += 1;
   } catch (e) {
     if (entry.recorded >= 0) {
-      console.warn(`[expiry] recording to ${entry.recordPath} failed: ${(e as Error).message}`);
+      log.warn(`recording to ${entry.recordPath} failed: ${(e as Error).message}`);
       entry.recorded = -1;   // latched: say it once, not once a minute
     }
   }
@@ -345,7 +349,7 @@ async function open(exchange: string, symbol: string, expiry: string): Promise<E
       try {
         sample(entry, snap);
       } catch (e) {
-        console.warn(`[expiry] ${key} sample failed: ${(e as Error).message}`);
+        log.warn(`${key} sample failed: ${(e as Error).message}`);
       }
     },
   );
@@ -354,12 +358,12 @@ async function open(exchange: string, symbol: string, expiry: string): Promise<E
   // only reliable signal that the tab is gone — there is no socket to close.
   entry.timer = setInterval(() => {
     if (Date.now() - entry.lastTouched < IDLE_MS) return;
-    console.log(`[expiry] ${key} idle — releasing the chain`);
+    log.info(`${key} idle — releasing the chain`);
     close(key);
   }, 60_000);
   entry.timer.unref?.();
 
-  console.log(`[expiry] watching ${symbol} ${expiry} on ${exchange} — lot ${entry.lot}, recording to ${path.basename(entry.recordPath)}`);
+  log.info(`watching ${symbol} ${expiry} on ${exchange} — lot ${entry.lot}, recording to ${path.basename(entry.recordPath)}`);
   return entry;
 }
 

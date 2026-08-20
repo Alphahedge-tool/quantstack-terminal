@@ -8,8 +8,13 @@
 import { route, ApiError } from '../server.js';
 import { activeFeed } from '../feeds/access.js';
 import { searchEligible, cacheStats, warmExchange } from '../lib/instrumentCache.js';
+import { hasParquet, searchAssetsParquet } from '../lib/parquetStore.js';
 import { getSession } from '../lib/sessionStore.js';
 import { latestTradingDate } from '../engine/rollingStraddle.js';
+
+import { logger } from '../lib/logger.js';
+
+const log = logger('instruments');
 
 // GET /api/instruments/search?q=&exchange=
 route('GET', '/api/instruments/search', async (_req, _res, { query }) => {
@@ -26,6 +31,29 @@ route('GET', '/api/instruments/search', async (_req, _res, { query }) => {
   // carries "". So it is expanded to every exchange the feed does carry.
   // allSettled, not all: one exchange being unavailable must not blank the
   // whole search.
+  /*
+   * Parquet first, and it usually answers.
+   *
+   * The store is written on every login warm and holds every asset with a live
+   * expiry, so this path serves the symbol picker without loading a single
+   * instrument master into memory — the JSON route below reads 33 MB per
+   * exchange and keeps 23 MB of it resident per date.
+   *
+   * It is a fast path, not a replacement: a fresh install has no parquet until
+   * the first warm converts one, and `null` means exactly that. Anything else
+   * falls through.
+   */
+  const fromParquet = hasParquet(exchange || 'NSE')
+    ? await searchAssetsParquet(q, exchange, limit).catch((e) => {
+      log.warn(`parquet search failed, using the JSON path: ${(e as Error).message}`);
+      return null;
+    })
+    : null;
+
+  if (fromParquet?.length) {
+    return { status: true, count: fromParquet.length, instruments: fromParquet, source: 'parquet' };
+  }
+
   const wanted = exchange ? [exchange] : feed.capabilities.exchanges;
   const date   = latestTradingDate();
   const session = getSession();
@@ -43,7 +71,7 @@ route('GET', '/api/instruments/search', async (_req, _res, { query }) => {
   );
 
   const results = searchEligible(q, exchange, limit);
-  return { status: true, count: results.length, instruments: results };
+  return { status: true, count: results.length, instruments: results, source: 'json' };
 });
 
 // GET /api/instruments/expiries?symbol=&exchange=&date=

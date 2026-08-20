@@ -8,6 +8,13 @@ import http from 'node:http';
 import zlib from 'node:zlib';
 import { FeedError, httpStatusFor } from './feeds/errors.js';
 
+import { logger } from './lib/logger.js';
+import {
+  httpRequests, httpDuration, httpInFlight, scrape, contentType,
+} from './lib/metrics.js';
+
+const log = logger('qt-backend');
+
 const PORT = Number(process.env.QT_BACKEND_PORT || 3101);
 
 // A straddle session is ~22.5k points; as raw JSON that's several MB of mostly
@@ -148,6 +155,36 @@ async function handle(
   const handler = routes.get(key);
   const accept  = String(req.headers['accept-encoding'] || '');
 
+  /**
+   * The metrics label is the REGISTERED route, never the raw path.
+   *
+   * An unrouted request is labelled `unknown` and nothing else. Port scanners,
+   * favicon probes and typo'd URLs all land here, and each distinct path would
+   * otherwise become a permanent time series — the one way a metrics endpoint
+   * can be turned into a memory leak from outside.
+   */
+  const routeLabel = handler ? url.pathname : 'unknown';
+  const method = req.method || 'GET';
+  const stop = httpDuration.startTimer({ method, route: routeLabel });
+  httpInFlight.inc();
+
+  /**
+   * Recorded from `finish`, not from the end of the handler.
+   *
+   * A route that streams (`/api/straddle/stream`, `/api/backtest/stream`)
+   * returns from its handler long before the response is done, and timing to
+   * the return would report a multi-second stream as instant.
+   */
+  let done = false;
+  const settle = (status: number) => {
+    if (done) return;
+    done = true;
+    stop();
+    httpInFlight.dec();
+    httpRequests.inc({ method, route: routeLabel, status: String(status) });
+  };
+  res.on('close', () => settle(res.statusCode));
+
   if (!handler) {
     writeJSON(res, 404, { status: false, message: `No route: ${key}` }, accept);
     return;
@@ -168,6 +205,21 @@ route('GET', '/api/health', () => ({
   status: true, service: 'qt-backend', ts: Date.now(), port: boundPort,
 }));
 
+/**
+ * Prometheus scrape endpoint.
+ *
+ * Outside `/api/` deliberately: `/metrics` is the conventional path every
+ * scraper defaults to, and putting it under the app's own namespace would mean
+ * every deployment needs a custom `metrics_path`.
+ *
+ * It writes its own response rather than returning an object, because the
+ * exposition format is text and the route table's default is JSON.
+ */
+route('GET', '/metrics', async (_req, res) => {
+  res.writeHead(200, { 'Content-Type': contentType() });
+  res.end(await scrape());
+});
+
 // ─── Server ───────────────────────────────────────────────────────────────────
 
 export function createServer(): http.Server {
@@ -184,20 +236,32 @@ export function startServer(port = PORT): http.Server {
   const server = createServer();
   boundPort = port;
   server.listen(port, () => {
-    console.log(`[qt-backend] listening on http://localhost:${port}`);
-    console.log(`[qt-backend] routes: ${[...routes.keys()].sort().join(' | ')}`);
+    log.info({ port, url: `http://localhost:${port}` }, 'http server listening');
+    log.debug({ routes: [...routes.keys()].sort() }, `${routes.size} routes registered`);
   });
   server.on('error', (err: NodeJS.ErrnoException) => {
     if (err.code === 'EADDRINUSE') {
-      console.error(
-        `[qt-backend] Port ${port} is already in use.\n`
+      /**
+       * Exit deliberately rather than rethrowing.
+       *
+       * A throw from inside an event handler becomes an uncaught exception, and
+       * the fatal handler in lib/logger.ts would print a stack underneath this
+       * message. The stack says nothing here — the port is taken, and the text
+       * below is the entire explanation — so two records of one failure would
+       * only make the useful one harder to find.
+       */
+      log.error(
+        { port },
+        `Port ${port} is already in use.\n`
         + '  Something else is bound to it — another qt-backend, or a different\n'
         + '  project. The nubra-dashboard reference pins SERVER_PORT=3001 in its\n'
         + '  own .env, which is why this default moved to 3101.\n'
         + `  Find the owner:  netstat -ano | findstr :${port}\n`
         + `  Or pick another: QT_BACKEND_PORT=3102 npm run dev`,
       );
+      process.exit(1);
     }
+    // Anything else IS worth a stack: the fatal handler in lib/logger.ts records it.
     throw err;
   });
   return server;

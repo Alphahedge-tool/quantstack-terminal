@@ -22,6 +22,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { logger } from './logger.js';
+
+const log = logger('session');
+
 const DIR = path.join(
   path.dirname(fileURLToPath(import.meta.url)), '..', 'cache', 'sessions',
 );
@@ -49,9 +53,9 @@ export function saveSession<T>(id: string, data: T, expiresAt: number): void {
     const envelope: Envelope<T> = { savedAt: Date.now(), expiresAt, data };
     // Written 0600 where the platform honours it — this is a bearer token.
     fs.writeFileSync(fileFor(id), JSON.stringify(envelope), { mode: 0o600 });
-    console.log(`[session] cached ${id} until ${new Date(expiresAt).toISOString()}`);
+    log.info(`cached ${id} until ${new Date(expiresAt).toISOString()}`);
   } catch (err) {
-    console.warn(`[session] could not cache ${id}: ${(err as Error).message}`);
+    log.warn(`could not cache ${id}: ${(err as Error).message}`);
   }
 }
 

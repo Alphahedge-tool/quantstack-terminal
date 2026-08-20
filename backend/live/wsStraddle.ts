@@ -47,10 +47,55 @@ import type http from 'node:http';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { requireSession } from '../lib/sessionStore.js';
 import {
-  startLiveStraddle, isMarketOpen, msUntilClose, type LiveStraddleHandle,
+  startLiveStraddle, isMarketOpen, msUntilClose,
+  type LiveStraddleHandle, type LiveStraddleOptions, type LiveStraddleEvent,
 } from '../engine/liveStraddle.js';
+import { startGoLiveStraddle, goEngineReady, goEngineEnabled } from '../lib/engineClient.js';
+import {
+  wsConnections, wsMessages, liveSessions, straddlePoints, straddleRolls, ivSource,
+} from '../lib/metrics.js';
+
+import { logger, asError } from '../lib/logger.js';
+
+const log = logger('qt-backend');
+
+/**
+ * Start a live session on whichever engine is available.
+ *
+ * The Go engine owns the socket, the parse, the books and the selection rule;
+ * the TypeScript engine does the same work on this thread. They return the same
+ * handle and emit the same events, so this is the only place that has to know
+ * there are two — and a failure to reach the Go engine falls straight through
+ * to the path that has always worked, rather than failing the subscribe.
+ *
+ * A session is placed ONCE, at start. It does not migrate mid-session: moving a
+ * running straddle between engines would mean re-arming depth and re-basing the
+ * OI counters, and the join would show as a step in every line on the chart.
+ */
+async function startEngine(
+  opts: LiveStraddleOptions,
+  emit: (e: LiveStraddleEvent) => void,
+): Promise<{ handle: LiveStraddleHandle; engine: EngineName }> {
+  if (goEngineEnabled() && await goEngineReady()) {
+    try {
+      return { handle: await startGoLiveStraddle(opts, emit), engine: 'go' };
+    } catch (err) {
+      log.warn(
+        { symbol: opts.symbol, expiry: opts.expiry, err: asError(err) },
+        'Go engine refused the contract — using the TypeScript engine',
+      );
+    }
+  }
+  return { handle: await startLiveStraddle(opts, emit), engine: 'typescript' };
+}
+
+/** Which engine computed a session — a closed set, so it is safe as a label. */
+type EngineName = 'typescript' | 'go';
 
 export const LIVE_STRADDLE_PATH = '/ws/live/straddle';
+
+/** Metrics label for this socket. One of a fixed set — see lib/metrics.ts. */
+const CHANNEL = 'straddle';
 
 /**
  * How long a session with no subscribers keeps running.
@@ -94,6 +139,14 @@ interface Session {
   closeTimer:  NodeJS.Timeout | null;
   /** Set while startLiveStraddle is in flight, so a second subscribe waits. */
   starting:    Promise<void> | null;
+  /**
+   * Which engine is computing this session.
+   *
+   * Held on the session rather than read at teardown because a session that
+   * failed to start has no handle to ask, and decrementing the gauge under the
+   * wrong label would leave it drifting upward for the life of the process.
+   */
+  engine:      EngineName | null;
 }
 
 const sessions = new Map<string, Session>();
@@ -107,6 +160,10 @@ function endSession(s: Session): void {
   if (s.closeTimer) { clearTimeout(s.closeTimer); s.closeTimer = null; }
   s.live?.stop();
   s.live = null;
+  if (s.engine) {
+    liveSessions.dec({ engine: s.engine });
+    s.engine = null;
+  }
   sessions.delete(s.key);
 }
 
@@ -126,8 +183,13 @@ export function attachLiveStraddleSocket(server: http.Server): void {
     let joined: Session | null = null;
     let missedPings = 0;
 
+    wsConnections.inc({ channel: CHANNEL });
+    ws.on('close', () => wsConnections.dec({ channel: CHANNEL }));
+
     const send = (payload: unknown) => {
-      if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(payload));
+      if (ws.readyState !== ws.OPEN) return;
+      ws.send(JSON.stringify(payload));
+      wsMessages.inc({ channel: CHANNEL, direction: 'out' });
     };
 
     /** Detach from the shared session without ending it for anyone else. */
@@ -221,7 +283,7 @@ export function attachLiveStraddleSocket(server: http.Server): void {
 
       const fresh: Session = {
         key, live: null, subscribers: new Set(), idleTimer: null, closeTimer: null,
-        starting: null,
+        starting: null, engine: null,
       };
       sessions.set(key, fresh);
       attach(fresh);
@@ -229,17 +291,29 @@ export function attachLiveStraddleSocket(server: http.Server): void {
       // Emissions fan out to whoever is attached at the time, which is what
       // makes the session outlive any one of them.
       const fanout = (payload: unknown) => {
+        const event = payload as { event?: string; point?: { ivSource?: string }; roll?: unknown };
+        // Counted here rather than inside either engine: this is the point that
+        // reached a browser, which is the number the chart is made of. A point
+        // computed and dropped on the floor is not one.
+        if (event.event === 'point') {
+          const engine = fresh.engine ?? 'typescript';
+          straddlePoints.inc({ engine });
+          if (event.roll) straddleRolls.inc({ engine });
+          ivSource.inc({ source: event.point?.ivSource ?? 'none' });
+        }
         for (const sink of fresh.subscribers) sink(payload);
       };
 
-      fresh.starting = startLiveStraddle(
+      fresh.starting = startEngine(
         { symbol, exchange, expiry, session, atmHint: msg.atmHint }, fanout,
       )
-        .then((handle) => {
+        .then(({ handle, engine }) => {
           // The session was already ended while the bridge was coming up —
           // nothing would ever call its stop().
           if (sessions.get(key) !== fresh) { handle.stop(); return; }
           fresh.live = handle;
+          fresh.engine = engine;
+          liveSessions.inc({ engine });
           const untilClose = msUntilClose(exchange);
           if (untilClose > 0) {
             fresh.closeTimer = setTimeout(() => {
@@ -263,6 +337,7 @@ export function attachLiveStraddleSocket(server: http.Server): void {
     };
 
     ws.on('message', (raw) => {
+      wsMessages.inc({ channel: CHANNEL, direction: 'in' });
       let msg: ClientMsg;
       try {
         msg = JSON.parse(raw.toString('utf8')) as ClientMsg;
@@ -319,5 +394,5 @@ export function attachLiveStraddleSocket(server: http.Server): void {
     ws.on('close', () => clearInterval(heartbeat));
   });
 
-  console.log(`[qt-backend] live straddle socket at ws://localhost:*${LIVE_STRADDLE_PATH}`);
+  log.info({ path: LIVE_STRADDLE_PATH }, 'live straddle socket listening');
 }

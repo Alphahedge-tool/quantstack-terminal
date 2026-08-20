@@ -7,6 +7,7 @@ dist-ssr
 # it would be larger than every other thing in this repo by three orders of
 # magnitude, and it goes stale daily.
 backend/cache/
+cache/
 
 *.local
 

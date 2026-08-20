@@ -148,6 +148,105 @@ leaves that unchanged.
 against this contract's own history — that history is what the recorder is
 building. Until then the level is indicative and the *change* is the signal.
 
+## Logging
+
+The backend logs through [pino](https://getpino.io). Every line carries a level,
+a timestamp and a `mod` field — the structured form of the `[module]` prefix the
+code already used by convention.
+
+```
+[10:14:02.331] INFO: [ws/quotes] quotes socket listening {"path":"/ws/live/quotes"}
+[10:14:02.918] INFO: [auth] feed connected {"feed":"nubra"}
+[10:14:03.402] INFO: [instrument-cache] 1842 instruments loaded {"exchange":"NSE","rows":1842}
+[10:31:55.117] WARN: [feeds] heartbeat delayed {"feed":"angel","misses":2}
+[10:31:58.240] ERROR: [feeds] feed disconnected {"feed":"angel"}
+[10:31:58.244] INFO: [live] failover → zerodha {"from":"angel","to":"zerodha","contracts":41}
+```
+
+At a terminal that is coloured and one line per event. Piped to a file or a
+process manager it is one JSON object per line instead, which is what a log
+shipper can index. The switch follows the TTY; `QT_LOG_PRETTY=1` or `0` forces
+it either way, and `QT_LOG_LEVEL` sets the floor (`debug` outside production).
+
+### Values go in the object, not the message
+
+```ts
+const log = logger('feeds');
+log.info({ feed: id, priority }, 'feed connected');   // yes
+log.info(`${id} connected (priority ${priority})`);   // no
+```
+
+The message is what gets grouped, counted and alerted on. Interpolating the feed
+id into it turns one event into as many distinct messages as there are feeds, and
+nothing downstream can tell they are the same thing happening again.
+
+### Secrets are redacted before serialisation
+
+`token`, `sessionToken`, `password`, `apiKey`, `totp` and their nested forms are
+replaced with `[redacted]` by pino itself, so a credential cannot escape by being
+inside an object somebody logged whole. This is not hypothetical: the live path
+threads a broker token through several layers, and the likeliest moment for one
+to be logged is inside an error describing a subscription that failed — which is
+exactly the line that gets pasted into an issue.
+
+### Scripts still use `console`, on purpose
+
+Everything under `backend/scripts/` is a CLI tool whose output is the product —
+`verifyGo.ts` prints a table of ✓ and ✗ for a person standing at a terminal.
+Wrapping those rows in timestamps and levels would make them worse, and it would
+put the pretty-printer's worker thread between the script and its own exit.
+`npm run lint:logs` enforces the split in both directions.
+
+## Metrics
+
+Every process exposes Prometheus metrics at `/metrics` — the Node backend on its
+API port, `marketd` and `computed` on theirs. `ops/prometheus.yml` scrapes all
+three.
+
+There is no flag to turn it on. A scrape endpoint that has to be enabled is one
+that turns out to be off on the day it is needed.
+
+### The five series worth a dashboard
+
+| series | what it tells you |
+| --- | --- |
+| `nodejs_eventloop_lag_p99_seconds` | whether Node is blocked. Everything on the screen is late by this much. |
+| `qt_feed_up{feed}` | a broker session is alive. The single most useful alert here. |
+| `rate(qt_engine_points_total[5m])` | the live engine is still producing |
+| `qt_engine_iv_source_total{source}` | whether vols are being **read** or **modelled** |
+| `qt_http_request_duration_seconds` | what the terminal is actually waiting on |
+
+The IV source one is the least obvious and the most valuable. When a broker's
+greeks stream goes quiet the chart keeps drawing a perfectly smooth IV line —
+it is just being solved from Black-76 rather than observed. Nothing in the UI
+says so, and nothing else in the system notices.
+
+### Cardinality is the one rule
+
+Every distinct combination of label values is a time series held in memory, in
+the scraper, and in storage forever. So labels here are closed sets — `feed`,
+`exchange`, `channel`, `engine`, and a **registered route** — and never a
+symbol, an expiry or a strike. An unrouted request is labelled `unknown` rather
+than by its path, which is what stops a port scanner from minting series from
+outside.
+
+### States are collected, events are counted
+
+Anything that is a state — is this feed up, how many sessions are running — is
+read at scrape time from whatever owns it. Pushing state means every writer must
+remember to update the gauge on every path, and the one path that forgets leaves
+a metric that is confidently wrong forever. Counters are the opposite: nothing
+retains a count of things that already happened, so those are incremented at the
+event.
+
+### Both sides measure the sidecar, on purpose
+
+`qt_compute_request_duration_seconds` (Node) and `qt_solve_duration_seconds`
+(Go) measure the same calls. Node's includes the loopback and the JSON encode of
+a 22k-bar batch; Go's is the maths alone. The gap between them is the cost of
+the process boundary — which is the number that decides whether more of the hot
+path is worth moving across it.
+
 ## The Go compute sidecar
 
 `backend-go/` is a second process that owns one thing: numeric work that runs in

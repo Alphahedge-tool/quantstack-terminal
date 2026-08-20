@@ -38,6 +38,11 @@ import { stateOf } from './breaker.js';
 import { instruments } from '../instruments/store.js';
 import { symbolOf, segmentOf } from '../instruments/symbol.js';
 
+import { logger, asError } from '../lib/logger.js';
+import { feedFailovers, feedTicks, feedTicksDeduped } from '../lib/metrics.js';
+
+const log = logger('live');
+
 /** How long the old feed keeps running after a switch, for overlap. */
 const OVERLAP_MS = Number(process.env.QT_LIVE_OVERLAP_MS || 3_000);
 
@@ -191,7 +196,7 @@ export class LiveRouter {
   private async reconcile(reason: SwitchReason): Promise<void> {
     if (this.resubscribing) return this.resubscribing;
     this.resubscribing = this.reconcileOnce(reason)
-      .catch((err) => console.error(`[live] reconcile failed: ${(err as Error).message}`))
+      .catch((err) => log.error({ err: asError(err), reason }, 'reconcile failed'))
       .finally(() => { this.resubscribing = null; });
     return this.resubscribing;
   }
@@ -202,7 +207,7 @@ export class LiveRouter {
 
     const choice = this.choose(keys);
     if (!choice) {
-      console.warn(`[live] no feed can carry ${keys.length} contract(s) — ticks paused`);
+      log.warn({ contracts: keys.length }, 'no feed can carry these contracts — ticks paused');
       this.teardown();
       return;
     }
@@ -226,10 +231,10 @@ export class LiveRouter {
     } catch (err) {
       // This feed cannot take the subscription. Park it briefly so the next
       // candidate is tried instead of retrying the same failure immediately.
-      console.warn(`[live] ${choice.feed.id} subscribe failed: ${(err as Error).message}`);
+      log.warn({ feed: choice.feed.id, err: asError(err) }, 'subscribe failed — parking feed');
       this.parked.set(choice.feed.id, Date.now() + 60_000);
       if (this.parked.size >= feeds().length) {
-        console.error('[live] every feed parked — ticks paused until one recovers');
+        log.error({ parked: this.parked.size }, 'every feed parked — ticks paused until one recovers');
         return;
       }
       return this.reconcileOnce('unhealthy');
@@ -256,8 +261,17 @@ export class LiveRouter {
       };
       this.switches.push(event);
       if (this.switches.length > 50) this.switches.shift();
-      console.log(
-        `[live] ${event.from ?? '(none)'} → ${event.to} (${event.reason}, ${event.keys} contracts)`,
+      feedFailovers.inc({
+        // 'none' rather than an empty label: the first subscription of a session
+        // has no predecessor, and folding that into the same series as a real
+        // switch would make every restart look like an outage.
+        from:   event.from ?? 'none',
+        to:     event.to,
+        reason: event.reason,
+      });
+      log.info(
+        { from: event.from ?? null, to: event.to, reason: event.reason, contracts: event.keys },
+        `failover → ${event.to}`,
       );
     }
   }
@@ -276,7 +290,8 @@ export class LiveRouter {
     // map is cheap enough to keep unconditionally.
     const dedupeKey = `${id}@${tick.ts}`;
     const now = Date.now();
-    if (this.recentTicks.has(dedupeKey)) return;
+    if (this.recentTicks.has(dedupeKey)) { feedTicksDeduped.inc(); return; }
+    feedTicks.inc({ feed: this.active?.feed.id ?? 'none' });
     this.recentTicks.set(dedupeKey, now);
     if (this.recentTicks.size > 4_000) {
       for (const [k, at] of this.recentTicks) {
@@ -290,7 +305,7 @@ export class LiveRouter {
         sub.handler(tick);
       } catch (err) {
         // One bad consumer must not kill the fan-out for the others.
-        console.error(`[live] subscriber threw: ${(err as Error).message}`);
+        log.error({ err: asError(err), instrument: id }, 'subscriber threw');
       }
     }
   }

@@ -52,6 +52,10 @@ import {
 } from '../analytics/syntheticFuture.js';
 import { sessionRange, latestTradingDate } from './rollingStraddle.js';
 
+import { logger } from '../lib/logger.js';
+
+const log = logger('bandGreeks');
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 /** Adjacent strikes either side of the ATM that are priced as candidates. */
@@ -512,8 +516,8 @@ export async function computeBandGreeks(
 
   mark('walk', tWalk);
   timings.total = Date.now() - t0;
-  console.log(
-    `[bandGreeks] ${exchange} ${symbol} ${expiry} ${date} @${resolvedInterval} — `
+  log.info(
+    `${exchange} ${symbol} ${expiry} ${date} @${resolvedInterval} — `
     + `${points.length} pts, Δ ${dMin}-${dMax}, ${used.size}/${legs.length} legs used, `
     + `${rollCount} rolls, coverage ${Math.round((covered / points.length) * 100)}% | `
     + Object.entries(timings).map(([k, v]) => `${k} ${v}ms`).join(' · '),

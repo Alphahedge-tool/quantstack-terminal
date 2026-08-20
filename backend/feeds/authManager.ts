@@ -17,6 +17,11 @@
 import { FeedError, classify } from './errors.js';
 import type { FeedId, MarketDataFeed } from './types.js';
 
+import { logger } from '../lib/logger.js';
+import { feedLogins } from '../lib/metrics.js';
+
+const log = logger('auth');
+
 /** Backoff ladder after a failed connect. Capped, not unbounded. */
 const BACKOFF_MS = [30_000, 60_000, 300_000, 900_000];
 
@@ -80,7 +85,8 @@ export function ensureConnected(feed: MarketDataFeed): Promise<void> {
       s.retryAfter  = 0;
       s.lastError   = undefined;
       s.connectedAt = Date.now();
-      console.log(`[auth] ${feed.id} connected`);
+      feedLogins.inc({ feed: feed.id, outcome: 'success' });
+      log.info({ feed: feed.id }, 'feed connected');
     })
     .catch((err) => {
       const fe = classify(err, feed.id);
@@ -88,7 +94,8 @@ export function ensureConnected(feed: MarketDataFeed): Promise<void> {
       s.lastError  = fe;
       s.retryAfter = Date.now()
         + BACKOFF_MS[Math.min(s.failures - 1, BACKOFF_MS.length - 1)];
-      console.error(`[auth] ${feed.id} login failed (${s.failures}×): ${fe.message}`);
+      feedLogins.inc({ feed: feed.id, outcome: 'failure' });
+      log.error({ feed: feed.id, failures: s.failures, code: fe.code, retryAfter: s.retryAfter }, fe.message);
       throw fe;
     })
     .finally(() => { s.inFlight = undefined; });
@@ -114,7 +121,8 @@ export async function withAuth<T>(
     const fe = classify(err, feed.id);
     if (fe.code !== 'AUTH') throw fe;
 
-    console.warn(`[auth] ${feed.id} session rejected mid-request — re-authenticating`);
+    feedLogins.inc({ feed: feed.id, outcome: 'reauth' });
+    log.warn({ feed: feed.id }, 'session rejected mid-request — re-authenticating');
     await feed.disconnect().catch(() => { /* already gone */ });
     await ensureConnected(feed);
     return fn();

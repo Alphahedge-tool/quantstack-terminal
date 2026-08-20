@@ -34,6 +34,10 @@ import {
 } from '../../../lib/sessionCache.js';
 import { ZerodhaStream } from './stream.js';
 
+import { logger } from '../../../lib/logger.js';
+
+const log = logger('adapters/zerodha');
+
 const CAPABILITIES: Capabilities = {
   // MCX is deliberately absent. Kite's MCX option coverage is thin enough that
   // claiming it would have the router send commodity straddles here and get
@@ -120,9 +124,9 @@ export class ZerodhaFeed implements MarketDataFeed {
         try {
           await kiteCall(cached, '/user/profile');
           this.session = cached;
-          console.log(`[${this.id}] reusing cached session for ${cached.userId}`);
+          log.info({ feed: this.id, userId: cached.userId }, 'reusing cached session');
         } catch {
-          console.log(`[${this.id}] cached session rejected — logging in again`);
+          log.info({ feed: this.id }, 'cached session rejected — logging in again');
           clearSession(this.id);
         }
       }

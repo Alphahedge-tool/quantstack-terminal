@@ -39,7 +39,15 @@ import { brokers } from '../trading/registry.js';
 import { AngelTrading } from '../trading/adapters/angel.js';
 import { AngelOrderStream, type StreamFault } from '../trading/orderStream/angel.js';
 
+import { logger } from '../lib/logger.js';
+import { wsConnections, wsMessages } from '../lib/metrics.js';
+
+const log = logger('ws/orders');
+
 export const LIVE_ORDERS_PATH = '/ws/live/orders';
+
+/** Metrics label for this socket. One of a fixed set — see lib/metrics.ts. */
+const CHANNEL = 'orders';
 
 /**
  * How long the upstream sockets stay up with no browser attached.
@@ -102,7 +110,7 @@ function startStreams(): void {
     });
   }
 
-  if (!streams.size) console.log('[ws/orders] no broker can carry an order stream');
+  if (!streams.size) log.info('no broker can carry an order stream');
 }
 
 function stopStreams(): void {
@@ -121,10 +129,15 @@ export function attachLiveOrdersSocket(server: http.Server): void {
   });
 
   wss.on('connection', (ws: WebSocket) => {
+    wsConnections.inc({ channel: CHANNEL });
+    ws.on('close', () => wsConnections.dec({ channel: CHANNEL }));
+
     let missedPings = 0;
 
     const send: Sink = (payload) => {
-      if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(payload));
+      if (ws.readyState !== ws.OPEN) return;
+      ws.send(JSON.stringify(payload));
+      wsMessages.inc({ channel: CHANNEL, direction: 'out' });
     };
 
     if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
@@ -138,6 +151,7 @@ export function attachLiveOrdersSocket(server: http.Server): void {
     }
 
     ws.on('message', (data: Buffer) => {
+      wsMessages.inc({ channel: CHANNEL, direction: 'in' });
       let msg: { type?: string };
       try { msg = JSON.parse(data.toString('utf8')); } catch { return; }
       if (msg.type === 'ping') send({ event: 'pong', t: Date.now() });
@@ -172,5 +186,5 @@ export function attachLiveOrdersSocket(server: http.Server): void {
     });
   });
 
-  console.log(`[ws/orders] listening on ${LIVE_ORDERS_PATH}`);
+  log.info({ path: LIVE_ORDERS_PATH }, 'orders socket listening');
 }

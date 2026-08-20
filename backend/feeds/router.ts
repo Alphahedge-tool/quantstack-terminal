@@ -24,6 +24,11 @@ import {
 } from './types.js';
 import type { InstrumentKind } from './identity.js';
 
+import { logger } from '../lib/logger.js';
+import { feedFailures } from '../lib/metrics.js';
+
+const log = logger('router');
+
 /** What a call needs, for capability matching. */
 interface Need {
   exchange: string;
@@ -181,7 +186,7 @@ export class FeedRouter implements MarketDataFeed {
         }
 
         if (degraded) {
-          console.warn(`[router] ${label}: ${degraded.reason}`);
+          log.warn({ request: label, feed: feed.id, reason: degraded.reason }, 'feed degraded');
         }
         return out;
       } catch (err) {
@@ -194,7 +199,8 @@ export class FeedRouter implements MarketDataFeed {
 
         lastFault = fe;
         skipped.push(`${feed.id}: ${fe.code}`);
-        console.warn(`[router] ${label}: ${feed.id} failed (${fe.code}) — trying next feed`);
+        feedFailures.inc({ feed: feed.id, code: fe.code });
+        log.warn({ request: label, feed: feed.id, code: fe.code }, 'feed failed — trying next feed');
       }
     }
 

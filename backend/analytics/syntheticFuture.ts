@@ -85,6 +85,50 @@ export interface StraddlePoint {
   greekSource?:    'feed' | 'black76';
 
   isRollEvent:     boolean;
+
+  /**
+   * Microstructure around the straddle at the same instant the point was
+   * computed — depth, open interest and volume for the strike actually held.
+   *
+   * Only the Go engine (`backend-go/straddle`) fills this in, so it is absent
+   * on every historical point and on any live point produced by the TypeScript
+   * engine. Nested rather than flattened so a consumer that has never heard of
+   * it drops one key instead of nine, and so the fields above stay exactly the
+   * shape the chart has always bound to.
+   *
+   * One instant is the reason it lives on the point at all: open interest read
+   * a second later is a different number from the one that priced this
+   * straddle, and "OI jumped while the straddle was at X" is only a statement
+   * if the two were observed together.
+   */
+  micro?: StraddleMicro;
+}
+
+/** See StraddlePoint.micro. Every field is absent rather than zero when the
+ *  feed did not publish what it is derived from. */
+export interface StraddleMicro {
+  /** CE spread + PE spread: what it costs to get out of the whole position. */
+  spreadRs?:    number;
+  spreadBps?:   number;
+  /** Mean of the two legs' book imbalance, in [-1, +1]. Summing a ratio would
+   *  produce a number in [-2, 2] that means nothing. */
+  imbalance?:   number;
+  microprice?:  number;
+
+  callOi?:      number;
+  putOi?:       number;
+  totalOi?:     number;
+  oiChange?:    number;
+  oiChangePct?: number;
+  /** Put OI over call OI at the held strike. */
+  pcr?:         number;
+
+  callVolume?:  number;
+  putVolume?:   number;
+
+  /** Both legs were quoted two-sided at selection time. False means the mid
+   *  came off an LTP fallback for at least one leg. */
+  firm:         boolean;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

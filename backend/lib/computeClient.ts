@@ -1,3 +1,8 @@
+import { logger } from './logger.js';
+import { computeRequests, computeDuration, computeBars } from './metrics.js';
+
+const log = logger('compute');
+
 /**
  * Client for `backend-go` — the Go compute sidecar.
  *
@@ -109,17 +114,46 @@ export function goComputeStatus(): { enabled: boolean; url: string; healthy: boo
 
 async function request<T>(path: string, body: unknown, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
   const abort = AbortSignal.timeout(timeoutMs);
-  const res = await fetch(`${BASE}${path}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-    signal: abort,
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`${path} → ${res.status} ${text.slice(0, 200)}`);
+  /**
+   * Timed around the WHOLE call, encode and decode included.
+   *
+   * The sidecar publishes its own `tookMs`, and that is the truth about the
+   * maths. This is the truth about what Node paid, which is a different number:
+   * `JSON.stringify` on a 22k-bar batch is single-threaded work on the event
+   * loop, and it is charged to this process whether the solve was fast or not.
+   * The gap between the two series is the cost of the boundary — the number
+   * that decides whether more should move across it.
+   */
+  const stop = computeDuration.startTimer({ endpoint: path });
+  try {
+    const res = await fetch(`${BASE}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: abort,
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      computeRequests.inc({ endpoint: path, outcome: `http_${res.status}` });
+      throw new Error(`${path} → ${res.status} ${text.slice(0, 200)}`);
+    }
+    const out = await res.json() as T;
+    computeRequests.inc({ endpoint: path, outcome: 'success' });
+    return out;
+  } catch (err) {
+    // A rejected fetch never reached the `!res.ok` branch, so it has not been
+    // counted yet. Distinguished from an HTTP failure because the two mean
+    // different things: one is a sidecar that answered badly, the other is a
+    // sidecar that is not there.
+    if ((err as Error)?.name === 'TimeoutError') {
+      computeRequests.inc({ endpoint: path, outcome: 'timeout' });
+    } else if (!/→ \d{3}/.test((err as Error)?.message || '')) {
+      computeRequests.inc({ endpoint: path, outcome: 'unreachable' });
+    }
+    throw err;
+  } finally {
+    stop();
   }
-  return res.json() as Promise<T>;
 }
 
 /**
@@ -141,15 +175,15 @@ export async function goComputeReady(): Promise<boolean> {
       healthy = res.ok;
       if (res.ok) {
         const info = await res.json().catch(() => ({})) as Record<string, unknown>;
-        console.log(
-          `[compute] Go sidecar up at ${BASE} — v${info.version ?? '?'} on ${info.go ?? '?'}, ${info.cores ?? '?'} cores`,
+        log.info(
+          `Go sidecar up at ${BASE} — v${info.version ?? '?'} on ${info.go ?? '?'}, ${info.cores ?? '?'} cores`,
         );
       } else {
-        console.warn(`[compute] Go sidecar health → ${res.status}; using the TypeScript path`);
+        log.warn(`Go sidecar health → ${res.status}; using the TypeScript path`);
       }
     } catch (e) {
       healthy = false;
-      console.warn(`[compute] Go sidecar unreachable at ${BASE} (${(e as Error).message}); using the TypeScript path`);
+      log.warn(`Go sidecar unreachable at ${BASE} (${(e as Error).message}); using the TypeScript path`);
     } finally {
       probe = null;
     }
@@ -165,7 +199,7 @@ export async function goComputeReady(): Promise<boolean> {
 export function markGoComputeDown(reason: string): void {
   healthy = false;
   disabledUntil = Date.now() + COOLDOWN_MS;
-  console.warn(`[compute] Go sidecar disabled for ${COOLDOWN_MS / 1000}s: ${reason}`);
+  log.warn(`Go sidecar disabled for ${COOLDOWN_MS / 1000}s: ${reason}`);
 }
 
 /**
@@ -193,6 +227,11 @@ export async function goSolveStraddleVol(
       markGoComputeDown(`returned ${out.iv?.length} values for ${bars.length} bars`);
       return null;
     }
+    // Bars that came back with no vol are not a failure — a straddle printing
+    // below |F − K| has no implied vol to find. But a RATIO that moves is a
+    // data-quality signal, and it is invisible without both numbers.
+    computeBars.inc({ outcome: 'solved' }, out.solved);
+    computeBars.inc({ outcome: 'unsolved' }, Math.max(0, bars.length - out.solved));
     return out;
   } catch (e) {
     markGoComputeDown((e as Error).message);

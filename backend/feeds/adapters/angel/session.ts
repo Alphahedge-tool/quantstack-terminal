@@ -26,6 +26,10 @@ import { generateTOTP, msUntilNextWindow, nearWindowEdge } from '../../../lib/to
 import { credentialsFor, type BrokerCredentials } from '../../../lib/credentialStore.js';
 import { smartCall, smartHeaders, authHeaders } from './http.js';
 
+import { logger } from '../../../lib/logger.js';
+
+const log = logger('angel');
+
 export interface AngelSession {
   clientCode:   string;
   apiKey:       string;
@@ -101,7 +105,7 @@ export async function login(creds: BrokerCredentials): Promise<AngelSession> {
   if (!data.feedToken) {
     // Not fatal for REST, but the live socket cannot work without it, and
     // discovering that at subscribe time hides the real cause.
-    console.warn('[angel] login returned no feedToken — live ticks will be unavailable');
+    log.warn('login returned no feedToken — live ticks will be unavailable');
   }
 
   const session: AngelSession = {
@@ -123,15 +127,15 @@ export async function login(creds: BrokerCredentials): Promise<AngelSession> {
     );
     const confirmed = String(profile.clientcode ?? '').trim();
     if (confirmed && confirmed.toUpperCase() !== clientCode.toUpperCase()) {
-      console.warn(`[angel] logged in as ${confirmed}, not ${clientCode} — using ${confirmed}`);
+      log.warn(`logged in as ${confirmed}, not ${clientCode} — using ${confirmed}`);
       session.clientCode = confirmed;
     }
   } catch (err) {
     // A profile failure is not a login failure. The session works.
-    console.warn(`[angel] getProfile failed (session is still valid): ${(err as Error).message}`);
+    log.warn(`getProfile failed (session is still valid): ${(err as Error).message}`);
   }
 
-  console.log(`[angel] logged in as ${session.clientCode} (${session.label})`);
+  log.info(`logged in as ${session.clientCode} (${session.label})`);
   return session;
 }
 

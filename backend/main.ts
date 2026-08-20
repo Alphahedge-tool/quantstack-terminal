@@ -22,6 +22,15 @@
 import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { logger, asError } from './lib/logger.js';
+
+/**
+ * Declared here, above the .env loader, because that loader is the first thing
+ * in this file that logs. The logger itself builds lazily on its first call
+ * (see lib/logger.ts), so importing it this early does not freeze the level
+ * before .env has been read.
+ */
+const log = logger('qt-backend');
 
 // Manual .env loader (no dotenv dependency)
 //
@@ -59,14 +68,14 @@ for (const candidate of ENV_CANDIDATES) {
 }
 
 if (envLoadedFrom) {
-  console.log(`[qt-backend] Loaded .env from ${envLoadedFrom}`);
+  log.info({ path: envLoadedFrom }, 'loaded .env');
 } else if (process.env.NUBRA_PHONE) {
-  console.log('[qt-backend] No .env file — using environment variables from the shell');
+  log.info('No .env file — using environment variables from the shell');
 } else {
   // Say so loudly. The old silent catch is what let production run credential-
   // less for as long as it did.
-  console.warn(
-    `[qt-backend] No .env found and no NUBRA_PHONE in the environment.\n`
+  log.warn(
+    `No .env found and no NUBRA_PHONE in the environment.\n`
     + `  Looked in: ${ENV_CANDIDATES.join(', ')}\n`
     + '  Auto-login will fail; the app will ask for credentials in the browser.',
   );
@@ -88,6 +97,10 @@ import './routes/expiry.js';
 
 // ── Feeds + server ────────────────────────────────────────────────────────────
 import { feeds } from './feeds/registry.js';
+import { stateOf as breakerStateOf } from './feeds/breaker.js';
+import { authStatus } from './feeds/authManager.js';
+import { cacheStats } from './lib/instrumentCache.js';
+import { installCollectors } from './lib/metrics.js';
 import { ensureConnected } from './feeds/authManager.js';
 import { startHealthProbe } from './feeds/health.js';
 import { warmPublicMasters } from './instruments/manager.js';
@@ -97,18 +110,36 @@ import { attachLiveOrdersSocket } from './live/wsOrders.js';
 import { attachLiveQuotesSocket } from './live/wsQuotes.js';
 import { attachAssistantSocket } from './live/wsAssistant.js';
 
+
 const PORT = Number(process.env.QT_BACKEND_PORT || 3101);
 
-console.log('[qt-backend] Starting QuantStack backend …');
+log.info('Starting QuantStack backend …');
+
+/**
+ * Wire the scrape-time gauges to whoever owns the state they report.
+ *
+ * Here rather than inside lib/metrics.ts because those sources are the feed
+ * registry, the breaker and the instrument cache — and every one of them
+ * imports the metrics module to increment a counter. Injecting the readers
+ * from the composition root keeps that a one-way dependency instead of a cycle.
+ */
+installCollectors({
+  feeds:        () => feeds().map((f) => ({ id: f.feed.id, priority: f.priority })),
+  breakerState: (id) => breakerStateOf(id),
+  isConnected:  (id) => Boolean(authStatus(id).connectedAt),
+  cacheStats,
+});
+
 
 // Connect every configured feed. Non-blocking, and a failure here is not fatal:
 // routes call activeFeed(), which logs in on demand, so a feed that is down at
 // boot recovers on its first request rather than requiring a restart.
 for (const { feed, priority } of feeds()) {
   ensureConnected(feed)
-    .then(() => console.log(`[qt-backend] ${feed.id} ready (priority ${priority})`))
-    .catch((e) => console.warn(
-      `[qt-backend] ${feed.id} not connected at boot — will retry on first request: ${(e as Error).message}`,
+    .then(() => log.info({ feed: feed.id, priority }, 'feed ready'))
+    .catch((e) => log.warn(
+      { feed: feed.id, err: asError(e) },
+      'feed not connected at boot — will retry on first request',
     ));
 }
 

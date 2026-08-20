@@ -22,6 +22,10 @@ import { AngelFeed }   from '../feeds/adapters/angel/index.js';
 import { ZerodhaFeed } from '../feeds/adapters/zerodha/index.js';
 import { KotakFeed }   from '../feeds/adapters/kotak/index.js';
 
+import { logger } from '../lib/logger.js';
+
+const log = logger('trading/registry');
+
 /**
  * Broker family → how to build a trading adapter from its feed adapter.
  *
@@ -82,7 +86,7 @@ export function brokers(): TradingBroker[] {
   }
 
   registry = out;
-  console.log(
+  log.info(
     out.length
       ? `[trading] enabled: ${out.map((b) => b.id).join(', ')}`
       : '[trading] no trading brokers configured',

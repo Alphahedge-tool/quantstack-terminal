@@ -47,7 +47,15 @@ import { IRIS_NAME } from '../assistant/types.js';
 import { watchesFor, allWatches } from '../assistant/monitor/watchStore.js';
 import { summarize } from '../assistant/monitor/engine.js';
 
+import { logger } from '../lib/logger.js';
+import { wsConnections, wsMessages } from '../lib/metrics.js';
+
+const log = logger('ws/assistant');
+
 export const ASSISTANT_PATH = '/ws/assistant';
+
+/** Metrics label for this socket. One of a fixed set — see lib/metrics.ts. */
+const CHANNEL = 'assistant';
 
 const PING_MS = 20_000;
 const PING_TOLERANCE = 2;
@@ -67,6 +75,9 @@ export function attachAssistantSocket(server: http.Server): void {
   });
 
   wss.on('connection', (ws: WebSocket) => {
+    wsConnections.inc({ channel: CHANNEL });
+    ws.on('close', () => wsConnections.dec({ channel: CHANNEL }));
+
     const sessionId = `s${nextSession++}_${Date.now().toString(36)}`;
     let missedPings = 0;
     let closed = false;
@@ -77,7 +88,9 @@ export function attachAssistantSocket(server: http.Server): void {
     const cancelled = new Set<string>();
 
     const send = (payload: unknown) => {
-      if (!closed && ws.readyState === ws.OPEN) ws.send(JSON.stringify(payload));
+      if (closed || ws.readyState !== ws.OPEN) return;
+      ws.send(JSON.stringify(payload));
+      wsMessages.inc({ channel: CHANNEL, direction: 'out' });
     };
 
     // The monitor is started on first connection rather than at boot: a
@@ -102,6 +115,7 @@ export function attachAssistantSocket(server: http.Server): void {
     }
 
     ws.on('message', (data: Buffer) => {
+      wsMessages.inc({ channel: CHANNEL, direction: 'in' });
       let msg: { type?: string; id?: string; text?: string };
       try { msg = JSON.parse(data.toString('utf8')); } catch { return; }
 
@@ -168,5 +182,5 @@ export function attachAssistantSocket(server: http.Server): void {
     });
   });
 
-  console.log(`[ws/assistant] ${IRIS_NAME} listening on ${ASSISTANT_PATH}`);
+  log.info(`${IRIS_NAME} listening on ${ASSISTANT_PATH}`);
 }

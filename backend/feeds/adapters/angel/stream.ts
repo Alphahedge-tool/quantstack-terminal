@@ -24,6 +24,10 @@ import { symbolOf, segmentOf } from '../../../instruments/symbol.js';
 import { SMART_STREAM_URL } from './http.js';
 import type { AngelSession } from './session.js';
 
+import { logger } from '../../../lib/logger.js';
+
+const log = logger('angel/stream');
+
 /** Angel's hard cap is 1000 tokens per session; leave headroom. */
 const MAX_TOKENS = 990;
 
@@ -154,8 +158,8 @@ function resolveKeys(keys: InstrumentKey[]): Resolved[] {
   }
 
   if (missing.length) {
-    console.warn(
-      `[angel/stream] ${missing.length} contract(s) not in Angel's master, skipped: `
+    log.warn(
+      `${missing.length} contract(s) not in Angel's master, skipped: `
       + `${missing.slice(0, 5).join(', ')}${missing.length > 5 ? ' …' : ''}`,
     );
   }
@@ -196,7 +200,7 @@ export class AngelStream {
     this.handler  = cb;
     this.resolved = resolveKeys(keys).slice(0, MAX_TOKENS);
     if (keys.length > MAX_TOKENS) {
-      console.warn(`[angel/stream] ${keys.length} contracts requested; Angel caps at ${MAX_TOKENS}`);
+      log.warn(`${keys.length} contracts requested; Angel caps at ${MAX_TOKENS}`);
     }
     this.byToken = new Map(this.resolved.map((r) => [`${r.exType}|${r.token}`, r.key]));
 
@@ -226,7 +230,7 @@ export class AngelStream {
 
     ws.on('open', () => {
       this.retries = 0;
-      console.log(`[angel/stream] connected — ${this.resolved.length} contracts`);
+      log.info(`connected — ${this.resolved.length} contracts`);
       this.sendSubscribe();
       this.startPing();
     });
@@ -245,7 +249,7 @@ export class AngelStream {
       this.ws = null;
       this.stopPing();
       if (this.closed) return;
-      console.warn(`[angel/stream] disconnected (${why}) — reconnecting`);
+      log.warn(`disconnected (${why}) — reconnecting`);
       this.scheduleReconnect();
     };
 
@@ -331,12 +335,12 @@ export class AngelStream {
       this.lastReauthAt = Date.now();
       try {
         this.session = await this.refresh();
-        console.log('[angel/stream] re-authenticated before reconnect');
+        log.info('re-authenticated before reconnect');
       } catch (err) {
         // Keep reconnecting on the old session — the next attempt tries again,
         // and a login that is failing for its own reasons is AuthManager's
         // problem to report, not a reason to stop the socket recovering.
-        console.warn(`[angel/stream] re-auth failed: ${(err as Error).message}`);
+        log.warn(`re-auth failed: ${(err as Error).message}`);
       }
     }
     if (this.closed) return;   // unsubscribed while the login was in flight

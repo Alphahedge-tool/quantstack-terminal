@@ -9,6 +9,7 @@
     "build": "tsc",
     "start": "node dist/main.js",
     "lint": "tsc --noEmit",
+    "lint:logs": "tsx scripts/lintLogs.ts",
     "verify:feeds": "tsx feeds/verify.ts",
     "verify:instruments": "tsx scripts/verifyInstruments.ts",
     "verify:decoders": "tsx scripts/verifyDecoders.ts",
@@ -16,15 +17,24 @@
     "verify:session": "tsx scripts/verifySessionRecovery.ts",
     "verify:assistant": "tsx scripts/verifyAssistant.ts",
     "verify:go": "tsx scripts/verifyGo.ts",
+    "verify:engine": "tsx scripts/verifyEngine.ts",
     "verify:fields": "tsx scripts/probeFields.ts",
     "verify:oi": "tsx scripts/probeOi.ts",
+    "duck": "tsx scripts/duck.ts",
+    "duck:build": "tsx scripts/probeParquet.ts",
     "verify:series": "tsx scripts/probeSeriesOi.ts",
     "go:dev": "cd ../backend-go && go run ./cmd/computed",
     "go:build": "cd ../backend-go && go build -o ../backend/bin/computed.exe ./cmd/computed",
+    "go:marketd": "cd ../backend-go && go run ./cmd/marketd",
+    "go:build:marketd": "cd ../backend-go && go build -o ../backend/bin/marketd.exe ./cmd/marketd",
     "go:test": "cd ../backend-go && go test ./...",
     "verify": "npm run verify:feeds && npm run verify:decoders && npm run verify:trading && npm run verify:instruments && npm run verify:session && npm run verify:assistant"
   },
   "dependencies": {
+    "@duckdb/node-api": "^1.5.5-r.4",
+    "pino": "^10.3.1",
+    "pino-pretty": "^13.1.3",
+    "prom-client": "^15.1.3",
     "ws": "^8.18.0"
   },
   "devDependencies": {

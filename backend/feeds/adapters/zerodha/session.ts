@@ -33,6 +33,10 @@ import { FeedError } from '../../errors.js';
 import { generateTOTP, msUntilNextWindow, nearWindowEdge } from '../../../lib/totp.js';
 import { credentialsFor, type BrokerCredentials } from '../../../lib/credentialStore.js';
 
+import { logger } from '../../../lib/logger.js';
+
+const log = logger('zerodha');
+
 const KITE_API = 'https://api.kite.trade';
 const KITE_WEB = 'https://kite.zerodha.com';
 
@@ -311,7 +315,7 @@ export async function login(creds: BrokerCredentials): Promise<ZerodhaSession> {
   // 5. Exchange.
   const { accessToken, userId: confirmed } = await exchangeRequestToken(creds, requestToken);
 
-  console.log(`[zerodha] logged in as ${confirmed || userId} (${creds.label})`);
+  log.info(`logged in as ${confirmed || userId} (${creds.label})`);
   return {
     apiKey,
     accessToken,
@@ -338,7 +342,7 @@ export async function sessionFromRequestToken(
   creds: BrokerCredentials, requestToken: string,
 ): Promise<ZerodhaSession> {
   const { accessToken, userId } = await exchangeRequestToken(creds, requestToken);
-  console.log(`[zerodha] logged in as ${userId} (${creds.label}) via browser login`);
+  log.info(`logged in as ${userId} (${creds.label}) via browser login`);
   return {
     apiKey:  String(creds.apiKey ?? ''),
     accessToken,

@@ -1,0 +1,78 @@
+# Prometheus scrape config for a local QuantStack stack.
+#
+#   prometheus --config.file=ops/prometheus.yml
+#
+# Three processes, three jobs. They are kept separate rather than folded into
+# one job with several targets because they are different SERVICES that happen
+# to run on one host: `up{job="qt-backend"}` should mean the Node backend, and a
+# single job would make that question unanswerable without a label match.
+
+global:
+  # Fifteen seconds is a compromise, and worth understanding rather than
+  # copying. The live engine emits four points a second, so a 15s scrape sees
+  # ~60 of them per sample — plenty for a rate. Going to 5s would triple storage
+  # for a smoother line nobody reads during market hours, and going to 60s would
+  # miss a failover entirely: a broker that drops and recovers inside one scrape
+  # interval leaves no trace at all in the counters.
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  external_labels:
+    env: local
+
+scrape_configs:
+  # ── The Node backend ──
+  #
+  # Watch `nodejs_eventloop_lag_p99_seconds` here above everything else. This
+  # process shares one thread between every HTTP route and every WebSocket, and
+  # sustained lag means prices on the screen are late by that much.
+  - job_name: qt-backend
+    static_configs:
+      - targets: ['127.0.0.1:3101']
+        labels:
+          component: api
+
+  # ── The Go market engine ──
+  #
+  # Only one of marketd and computed will be listening in a given deployment:
+  # marketd serves everything computed does. Prometheus reports the other as
+  # `up == 0`, which is why both are listed — a job that is deliberately absent
+  # is more legible than a config that has to be edited per environment.
+  - job_name: qt-marketd
+    static_configs:
+      - targets: ['127.0.0.1:3152']
+        labels:
+          component: engine
+
+  - job_name: qt-computed
+    static_configs:
+      - targets: ['127.0.0.1:3151']
+        labels:
+          component: solver
+
+# ── Rules worth having on day one ──
+#
+# Saved separately (ops/alerts.yml) and referenced here once there is somewhere
+# for alerts to go. Listed as comments rather than wired up, because an alert
+# with no receiver is a rule that fails silently:
+#
+#   qt_feed_up == 0 for 2m
+#     A broker session is gone and has not come back. The single most useful
+#     alert in the system.
+#
+#   nodejs_eventloop_lag_p99_seconds > 0.1 for 5m
+#     Something synchronous is starving the sockets.
+#
+#   rate(qt_engine_points_total[5m]) == 0 and qt_market_open == 1
+#     The engine has stopped producing while the market is open. The second
+#     clause is what keeps this from firing every evening — and an alert that
+#     fires every evening is one that gets muted within a week.
+#
+#   increase(qt_feed_failovers_total[15m]) > 3
+#     Flapping between brokers. Each individual switch is the design working;
+#     four in a quarter of an hour is not.
+#
+#   rate(qt_engine_iv_source_total{source="black76"}[10m])
+#     / rate(qt_engine_iv_source_total[10m]) > 0.5
+#     More than half the vols are being modelled rather than read. The chart
+#     looks completely normal while this happens, which is exactly why it
+#     needs an alert rather than an eye.

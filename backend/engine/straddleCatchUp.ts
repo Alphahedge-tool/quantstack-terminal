@@ -46,6 +46,12 @@ import {
   type RiskReversalPoint, type RiskReversalResult,
 } from './riskReversal.js';
 
+import { logger } from '../lib/logger.js';
+
+const log = logger('straddle');
+const logBandGreeks = logger('bandGreeks');
+const logRiskReversal = logger('riskReversal');
+
 // ── Tuning ───────────────────────────────────────────────────────────────────
 
 /** Quote history fetched before the seam so advanceQuote's cursors start warm. */
@@ -203,8 +209,8 @@ export async function catchUpStraddle(
   };
 
   const computeMs = Date.now() - t0;
-  console.log(
-    `[straddle] CATCHUP ${opts.exchange} ${opts.symbol} ${opts.expiry} ${opts.date} — `
+  log.info(
+    `CATCHUP ${opts.exchange} ${opts.symbol} ${opts.expiry} ${opts.date} — `
     + `+${fresh.length} pts, +${freshRolls.length} rolls, `
     + `${new Date(seam).toISOString()} → ${new Date(points[points.length - 1].time).toISOString()} `
     + `in ${computeMs}ms`,
@@ -300,8 +306,8 @@ export async function catchUpBandGreeks(
   };
 
   const computeMs = Date.now() - t0;
-  console.log(
-    `[bandGreeks] CATCHUP ${opts.exchange} ${opts.symbol} ${opts.expiry} ${opts.date} `
+  logBandGreeks.info(
+    `CATCHUP ${opts.exchange} ${opts.symbol} ${opts.expiry} ${opts.date} `
     + `Δ ${opts.deltaMin}-${opts.deltaMax} — +${fresh.length} pts in ${computeMs}ms`,
   );
 
@@ -389,8 +395,8 @@ export async function catchUpRiskReversal(
   };
 
   const computeMs = Date.now() - t0;
-  console.log(
-    `[riskReversal] CATCHUP ${opts.exchange} ${opts.symbol} ${opts.expiry} ${opts.date} `
+  logRiskReversal.info(
+    `CATCHUP ${opts.exchange} ${opts.symbol} ${opts.expiry} ${opts.date} `
     + `Δ${opts.targetDelta} — +${fresh.length} pts in ${computeMs}ms`,
   );
 

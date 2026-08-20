@@ -20,6 +20,10 @@ import { FeedError } from '../../errors.js';
 import { generateTOTP } from '../../../lib/totp.js';
 import { credentialsFor, type BrokerCredentials } from '../../../lib/credentialStore.js';
 
+import { logger } from '../../../lib/logger.js';
+
+const log = logger('kotak');
+
 const LOGIN_URL    = 'https://mis.kotaksecurities.com/login/1.0/tradeApiLogin';
 const VALIDATE_URL = 'https://mis.kotaksecurities.com/login/1.0/tradeApiValidate';
 
@@ -176,7 +180,7 @@ export async function login(creds: BrokerCredentials): Promise<KotakSession> {
     );
   }
 
-  console.log(`[kotak] logged in as ${ucc} (${creds.label}) via ${baseUrl}`);
+  log.info(`logged in as ${ucc} (${creds.label}) via ${baseUrl}`);
   return {
     tradeToken,
     sid:      str(validated.sid) || viewSid,

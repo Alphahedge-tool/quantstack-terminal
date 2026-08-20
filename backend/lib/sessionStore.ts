@@ -5,6 +5,11 @@
 
 import { login, type NubraSession, type NubraCredentials } from '../brokers/nubra.js';
 
+import { logger, asError } from './logger.js';
+
+const log = logger('nubra-session');
+const logInstrumentCache = logger('instrument-cache');
+
 let _session: NubraSession | null = null;
 let _loginAt: number = 0;
 const SESSION_TTL_MS = 8 * 60 * 60 * 1000;   // 8 hours (Nubra sessions last ~12h)
@@ -12,7 +17,7 @@ const SESSION_TTL_MS = 8 * 60 * 60 * 1000;   // 8 hours (Nubra sessions last ~12
 export function getSession(): NubraSession | null {
   if (!_session) return null;
   if (Date.now() - _loginAt > SESSION_TTL_MS) {
-    console.warn('[nubra-session] Session TTL exceeded — will re-login on next request');
+    log.warn('Session TTL exceeded — will re-login on next request');
     _session = null;
     return null;
   }
@@ -28,7 +33,7 @@ export function requireSession(): NubraSession {
 export function setSession(session: NubraSession): void {
   _session = session;
   _loginAt = Date.now();
-  console.log(`[nubra-session] Session active — clientCode=${session.clientCode || '?'} phone=${session.phone}`);
+  log.info(`Session active — clientCode=${session.clientCode || '?'} phone=${session.phone}`);
 
   // Warm the instrument master in the background. This is the one choke point
   // every login path goes through (auto-login, POST /login, TOTP setup), so the
@@ -36,7 +41,7 @@ export function setSession(session: NubraSession): void {
   // keeps sessionStore out of the nubraData ↔ instrumentCache import cycle.
   void import('./instrumentCache.js')
     .then((m) => m.warmInstrumentCache(session))
-    .catch((e) => console.warn(`[instrument-cache] Warm skipped: ${(e as Error).message}`));
+    .catch((e) => logInstrumentCache.warn(`Warm skipped: ${(e as Error).message}`));
 }
 
 export function clearSession(): void {
@@ -68,8 +73,8 @@ export async function autoLoginFromEnv(): Promise<boolean> {
   const resolved = await credentialsFor('nubra');
 
   if (!resolved) {
-    console.warn(
-      '[nubra-session] No credentials — add an enabled, auto_login row to Supabase'
+    log.warn(
+      'No credentials — add an enabled, auto_login row to Supabase'
       + ' broker_accounts, or set NUBRA_PHONE / NUBRA_MPIN / NUBRA_TOTP_SECRET',
     );
     return false;
@@ -82,11 +87,11 @@ export async function autoLoginFromEnv(): Promise<boolean> {
     env:        resolved.env,
   };
   try {
-    console.log(`[nubra-session] Auto-login as ${resolved.label} (from ${resolved.source}) …`);
+    log.info(`Auto-login as ${resolved.label} (from ${resolved.source}) …`);
     setSession(await login(cr));
     return true;
   } catch (err) {
-    console.error('[nubra-session] Auto-login failed:', (err as Error).message);
+    log.error({ err: asError(err) }, 'auto-login failed');
     return false;
   }
 }

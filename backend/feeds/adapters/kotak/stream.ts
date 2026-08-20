@@ -33,6 +33,10 @@ import { instruments } from '../../../instruments/store.js';
 import { symbolOf, segmentOf } from '../../../instruments/symbol.js';
 import type { KotakSession } from './session.js';
 
+import { logger } from '../../../lib/logger.js';
+
+const log = logger('kotak/stream');
+
 const HSM_URL = process.env.KOTAK_HSM_URL || 'wss://mlhsm.kotaksecurities.com';
 
 const MAX_INSTRUMENTS = 200;
@@ -223,15 +227,15 @@ export class KotakStream {
     }
 
     if (missing.length) {
-      console.warn(
-        `[kotak/stream] ${missing.length} contract(s) not in Kotak's master, skipped: `
+      log.warn(
+        `${missing.length} contract(s) not in Kotak's master, skipped: `
         + `${missing.slice(0, 5).join(', ')}${missing.length > 5 ? ' …' : ''}`,
       );
     }
     if (!this.items.length) throw new Error('Kotak carries none of the requested contracts');
 
     if (this.items.length > MAX_INSTRUMENTS) {
-      console.warn(`[kotak/stream] ${this.items.length} contracts requested; HSM caps at ${MAX_INSTRUMENTS}`);
+      log.warn(`${this.items.length} contracts requested; HSM caps at ${MAX_INSTRUMENTS}`);
       this.items = this.items.slice(0, MAX_INSTRUMENTS);
     }
 
@@ -261,7 +265,7 @@ export class KotakStream {
       if (this.ws !== ws) return;
       this.ws = null;
       if (this.closed) return;
-      console.warn(`[kotak/stream] disconnected (${why}) — reconnecting`);
+      log.warn(`disconnected (${why}) — reconnecting`);
       this.scheduleReconnect();
     };
 
@@ -299,7 +303,7 @@ export class KotakStream {
     }
 
     if (status !== 'K') {
-      console.error('[kotak/stream] authentication rejected');
+      log.error('authentication rejected');
       this.close();
       return;
     }
@@ -308,7 +312,7 @@ export class KotakStream {
     // Topic ids are assigned per CONNECTION. Carrying them across a reconnect
     // would decode new packets against stale instruments.
     this.topics.clear();
-    console.log(`[kotak/stream] connected — ${this.items.length} contracts`);
+    log.info(`connected — ${this.items.length} contracts`);
     this.sendSubscribe();
   }
 

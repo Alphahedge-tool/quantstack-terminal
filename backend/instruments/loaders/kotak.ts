@@ -18,6 +18,10 @@ import type { ContractType } from '../symbol.js';
 import { canonicalSymbol } from '../symbol.js';
 import { parseCSV } from '../csv.js';
 
+import { logger } from '../../lib/logger.js';
+
+const log = logger('instruments');
+
 /** API hosts, in the order they are worth trying. */
 const HOSTS = [
   'https://gw-napi.kotaksecurities.com',
@@ -164,7 +168,7 @@ export async function loadKotakMaster(
       const res = await fetch(url, { signal: AbortSignal.timeout(60_000) });
       if (res.ok) files.push({ url, text: await res.text() });
     } catch {
-      console.warn(`[instruments] kotak segment unavailable: ${url}`);
+      log.warn(`kotak segment unavailable: ${url}`);
     }
   }
 

@@ -23,6 +23,10 @@
 
 import { fetchBrokerAccounts, supabaseConfigured, type BrokerAccountRow } from './supabase.js';
 
+import { logger } from './logger.js';
+
+const log = logger('credentials');
+
 export interface BrokerCredentials {
   broker:      string;
   phone:       string;
@@ -162,11 +166,11 @@ async function rows(): Promise<BrokerAccountRow[]> {
   inFlight = fetchBrokerAccounts()
     .then((fresh) => {
       cached = { rows: fresh, at: Date.now() };
-      console.log(`[credentials] Loaded ${fresh.length} broker account(s) from Supabase`);
+      log.info(`Loaded ${fresh.length} broker account(s) from Supabase`);
       return fresh;
     })
     .catch((err) => {
-      console.warn(`[credentials] Supabase read failed — falling back to env: ${(err as Error).message}`);
+      log.warn(`Supabase read failed — falling back to env: ${(err as Error).message}`);
       // Serve stale rather than nothing: an expired cache still beats dropping
       // to env vars that may not be set on this machine at all.
       return cached?.rows ?? [];
@@ -244,8 +248,8 @@ export async function credentialsFor(
   for (const c of enabled) {
     const missing = missingFields(c, broker);
     if (missing.length) {
-      console.warn(
-        `[credentials] ${broker} account "${c.label}" is enabled but missing: ${missing.join(', ')}`,
+      log.warn(
+        `${broker} account "${c.label}" is enabled but missing: ${missing.join(', ')}`,
       );
     }
   }
@@ -270,8 +274,8 @@ export async function credentialsFor(
     // phone/pin/totp trio, which told someone debugging a Zerodha row to go
     // looking for a phone number it does not need.
     const need = (REQUIRED[broker] ?? REQUIRED.nubra).join(', ');
-    console.warn(
-      `[credentials] Supabase has rows but none usable for ${broker}`
+    log.warn(
+      `Supabase has rows but none usable for ${broker}`
       + ` (need enabled + auto_login + ${need})`,
     );
   }

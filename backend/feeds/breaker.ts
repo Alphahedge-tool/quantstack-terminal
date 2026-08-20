@@ -16,6 +16,10 @@
 
 import type { FeedId } from './types.js';
 
+import { logger } from '../lib/logger.js';
+
+const log = logger('breaker');
+
 export type BreakerState = 'CLOSED' | 'OPEN' | 'HALF_OPEN';
 
 const THRESHOLD    = Number(process.env.QT_FEED_BREAKER_THRESHOLD   || 3);
@@ -50,7 +54,7 @@ function entryOf(id: FeedId): Entry {
 
 function transition(id: FeedId, e: Entry, to: BreakerState): void {
   if (e.state === to) return;
-  console.log(`[breaker] ${id}: ${e.state} → ${to}`);
+  log.info({ feed: id, from: e.state, to }, 'breaker state changed');
   e.state = to;
   e.lastStateAt = Date.now();
 }
@@ -110,9 +114,9 @@ export function recordFailure(id: FeedId, reason: string): void {
     e.openedAt = Date.now();
     e.trips++;
     transition(id, e, 'OPEN');
-    console.warn(
-      `[breaker] ${id} opened after ${e.failures} consecutive faults `
-      + `(${Math.round(e.cooldown / 1000)}s cooldown) — last: ${reason}`,
+    log.warn(
+      { feed: id, failures: e.failures, cooldownSec: Math.round(e.cooldown / 1000), reason },
+      'breaker opened — feed parked',
     );
   }
 }

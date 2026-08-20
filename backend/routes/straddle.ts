@@ -30,6 +30,12 @@ import {
   cacheKey, getComputed, setComputed, invalidate, cacheStatus,
 } from '../lib/computeCache.js';
 
+import { logger, asError } from '../lib/logger.js';
+
+const log = logger('straddle');
+const logBandGreeks = logger('bandGreeks');
+const logRiskReversal = logger('riskReversal');
+
 // ── Hit / miss counters (for diagnostics) ─────────────────────────────────
 let hits = 0, misses = 0;
 
@@ -173,7 +179,7 @@ route('POST', '/api/straddle/history', async (req) => {
           payload = tail.merged;
         }
       } catch (err) {
-        console.warn(`[straddle] catch-up failed for ${key}:`, (err as Error)?.message);
+        log.warn({ key, err: asError(err) }, 'catch-up failed');
       }
     }
     // Surface cache hit to caller
@@ -182,7 +188,7 @@ route('POST', '/api/straddle/history', async (req) => {
   misses++;
 
   // ── Cache miss → compute ─────────────────────────────────────────────────
-  console.log(`[straddle] MISS ${key} — computing…`);
+  log.info(`MISS ${key} — computing…`);
   const t0 = Date.now();
   const { result, provenance } = await withProvenance(
     () => computeRollingStraddle({ symbol, exchange, expiry, date, feed }),
@@ -194,7 +200,7 @@ route('POST', '/api/straddle/history', async (req) => {
   setComputed(key, result, date);
 
   const elapsed = Date.now() - t0;
-  console.log(`[straddle] DONE ${key} in ${elapsed}ms — ${result.points.length} pts`);
+  log.info(`DONE ${key} in ${elapsed}ms — ${result.points.length} pts`);
 
   return {
     ...result,
@@ -288,7 +294,7 @@ route('GET', '/api/straddle/band-greeks', async (_req, res, { query }) => {
             emit('append', { points: [] });
           }
         } catch (err) {
-          console.warn(`[bandGreeks] catch-up failed for ${key}:`, (err as Error)?.message);
+          logBandGreeks.warn({ key, err: asError(err) }, 'catch-up failed');
           emit('append', { points: [], _error: (err as Error)?.message || 'Catch-up failed' });
         }
       }
@@ -421,7 +427,7 @@ route('GET', '/api/straddle/risk-reversal', async (_req, res, { query }) => {
             emit('append', { points: [] });
           }
         } catch (err) {
-          console.warn(`[riskReversal] catch-up failed for ${key}:`, (err as Error)?.message);
+          logRiskReversal.warn({ key, err: asError(err) }, 'catch-up failed');
           emit('append', { points: [], _error: (err as Error)?.message || 'Catch-up failed' });
         }
       }
@@ -595,7 +601,7 @@ route('GET', '/api/straddle/stream', async (req, res, { query }) => {
         } catch (err) {
           // Best-effort by design: the cached session is already drawn, and a
           // failed top-up must not take it off the screen.
-          console.warn(`[straddle] catch-up failed for ${key}:`, (err as Error)?.message);
+          log.warn({ key, err: asError(err) }, 'catch-up failed');
           emit('append', { points: [], rollEvents: [], _error: (err as Error)?.message || 'Catch-up failed' });
         }
       }

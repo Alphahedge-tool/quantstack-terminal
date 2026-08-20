@@ -25,6 +25,10 @@
 
 import { LRUCache } from './lruCache.js';
 
+import { logger } from './logger.js';
+
+const log = logger('compute-cache');
+
 // ── TTL constants ──────────────────────────────────────────────────────────
 const TTL_HISTORICAL_MS = 48 * 60 * 60 * 1000;  // 48 h — past days
 const TTL_TODAY_MS      = 12 * 60 * 60 * 1000;  // 12 h — current day, kept fresh by catch-up
@@ -60,7 +64,7 @@ export function cacheKey(
 export function getComputed(key: string): any | null {
   const hit = cache.get(key);
   if (hit) {
-    console.log(`[compute-cache] HIT  ${key}`);
+    log.info(`HIT  ${key}`);
   }
   return hit;
 }
@@ -70,15 +74,15 @@ export function getComputed(key: string): any | null {
 export function setComputed(key: string, data: any, date: string): void {
   const ttl = isToday(date) ? TTL_TODAY_MS : TTL_HISTORICAL_MS;
   cache.set(key, data, ttl);
-  console.log(
-    `[compute-cache] SET  ${key}  TTL=${ttl / 60000}min`,
+  log.info(
+    `SET  ${key}  TTL=${ttl / 60000}min`,
   );
 }
 
 /** Invalidate one specific entry (e.g. force-refresh today's data). */
 export function invalidate(key: string): void {
   cache.delete(key);
-  console.log(`[compute-cache] DEL  ${key}`);
+  log.info(`DEL  ${key}`);
 }
 
 /** Current cache stats — exposed via /api/straddle/cache-status. */

@@ -233,6 +233,10 @@ export function symbolDataHasPoints(symData: unknown): boolean {
 
 import { getCachedRefdata } from './instrumentCache.js';
 
+import { logger } from './logger.js';
+
+const log = logger('nubra');
+
 /**
  * Return the CE/PE rows for `symbol` on `date`.
  *
@@ -466,7 +470,7 @@ async function fetchRollingBatch(opts: {
       try {
         const hit = await attempt(false, interval);
         greeksUnsupported = true;
-        console.warn('[nubra] charts/timeseries rejected greek fields — continuing without them');
+        log.warn('charts/timeseries rejected greek fields — continuing without them');
         if (hit) return hit;
       } catch { /* not the greeks; fall through to the interval fallback */ }
     }

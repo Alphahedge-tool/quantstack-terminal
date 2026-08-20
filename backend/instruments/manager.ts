@@ -20,6 +20,10 @@ import { loadZerodhaMaster } from './loaders/zerodha.js';
 import { loadKotakMaster } from './loaders/kotak.js';
 import type { InstrumentRow } from './types.js';
 
+import { logger } from '../lib/logger.js';
+
+const log = logger('instruments');
+
 /** Credentials a session-bound loader needs. Only the fields it actually uses. */
 export interface MasterCredentials {
   apiKey?:      string;
@@ -96,9 +100,9 @@ export function publicMasterBrokers(): string[] {
 export function warmPublicMasters(): void {
   for (const broker of publicMasterBrokers()) {
     ensureMaster(broker)
-      .then((status) => console.log(`[instruments] ${broker} master ${status}`))
-      .catch((err) => console.warn(
-        `[instruments] ${broker} master unavailable at boot — will retry on demand: ${(err as Error).message}`,
+      .then((status) => log.info(`${broker} master ${status}`))
+      .catch((err) => log.warn(
+        `${broker} master unavailable at boot — will retry on demand: ${(err as Error).message}`,
       ));
   }
 }

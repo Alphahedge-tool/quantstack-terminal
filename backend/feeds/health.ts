@@ -16,6 +16,10 @@ import { ensureConnected } from './authManager.js';
 import { classify } from './errors.js';
 import { feeds } from './registry.js';
 
+import { logger } from '../lib/logger.js';
+
+const log = logger('health');
+
 const INTERVAL_MS = Number(process.env.QT_FEED_HEALTH_INTERVAL_MS || 30_000);
 
 let timer: NodeJS.Timeout | null = null;
@@ -31,7 +35,7 @@ async function probeOnce(): Promise<void> {
       await ensureConnected(feed);
       await feed.ping();
       recordSuccess(feed.id);
-      console.log(`[health] ${feed.id} recovered`);
+      log.info({ feed: feed.id }, 'feed recovered');
     } catch (err) {
       const fe = classify(err, feed.id);
       // An AUTH failure means the SESSION is dead, not that the broker is down.
@@ -50,7 +54,7 @@ export function startHealthProbe(): void {
   timer = setInterval(() => { void probeOnce(); }, INTERVAL_MS);
   // Never hold the process open for a probe loop.
   timer.unref?.();
-  console.log(`[health] probing degraded feeds every ${INTERVAL_MS / 1000}s`);
+  log.info({ intervalSec: INTERVAL_MS / 1000 }, 'probing degraded feeds');
 }
 
 export function stopHealthProbe(): void {

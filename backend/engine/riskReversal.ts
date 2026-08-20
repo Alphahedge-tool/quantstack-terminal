@@ -73,6 +73,10 @@ import {
 } from '../analytics/black76.js';
 import { sessionRange, latestTradingDate } from './rollingStraddle.js';
 
+import { logger } from '../lib/logger.js';
+
+const log = logger('riskReversal');
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 /** Adjacent strikes either side of the ATM priced as straddle candidates. */
@@ -553,8 +557,8 @@ export async function computeRiskReversal(
 
   mark('walk', tWalk);
   timings.total = Date.now() - t0;
-  console.log(
-    `[riskReversal] ${exchange} ${symbol} ${expiry} ${date} @${resolvedInterval} — `
+  log.info(
+    `${exchange} ${symbol} ${expiry} ${date} @${resolvedInterval} — `
     + `${points.length} pts, Δ${target}±${tolerance}, ${legs.length} legs, ${rollCount} rolls, `
     + `coverage ${Math.round((covered / points.length) * 100)}%, `
     + `feed IV ${ivsUsed ? Math.round((ivsFromFeed / ivsUsed) * 100) : 0}% | `

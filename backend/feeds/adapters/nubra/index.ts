@@ -41,6 +41,7 @@ import {
   resolveSpotCandidates,
   type InstrumentRow,
 } from '../../../lib/instrumentCache.js';
+import { hasParquet, expiriesParquet } from '../../../lib/parquetStore.js';
 import { getSession, setSession, clearSession } from '../../../lib/sessionStore.js';
 import { credentialsFor } from '../../../lib/credentialStore.js';
 
@@ -52,6 +53,11 @@ import type {
   Capabilities, CandleRequest, CandleResult, Instrument, MarketDataFeed,
   OptionSeries, SeriesRequest, SeriesResult, Tick, TradableAsset, UnderlyingKind,
 } from '../../types.js';
+
+import { logger, asError } from '../../../lib/logger.js';
+
+const log = logger('nubra/live');
+const logNubra = logger('nubra');
 
 // ── Capabilities ─────────────────────────────────────────────────────────────
 
@@ -281,9 +287,9 @@ export class NubraFeed implements MarketDataFeed {
       deviceId:   this.instance ? `quantstack-${this.instance}` : undefined,
     };
 
-    console.log(
-      `[${this.id}] Logging in as ${resolved.label}`
-      + ` (${resolved.env ?? 'default'}, credentials from ${resolved.source})`,
+    log.info(
+      { feed: this.id, env: resolved.env ?? 'default', source: resolved.source },
+      `logging in as ${resolved.label}`,
     );
 
     try {
@@ -343,8 +349,46 @@ export class NubraFeed implements MarketDataFeed {
     }
   }
 
+  /**
+   * Expiries for one asset.
+   *
+   * The parquet store answers this from one column across the live partitions
+   * and never opens an instrument master. That matters most where this is
+   * called in a LOOP: the DTE-median compare asks it once per candidate date
+   * walking back through the calendar, and on the JSON path every candidate not
+   * already resident loaded a 33 MB master — measured at 5.9s and 23 MB of heap
+   * apiece, which is what made the compare slow and eventually killed the
+   * process.
+   *
+   * Falls through when the store has nothing for that exchange yet, which is
+   * the state of a fresh install until the first warm converts one.
+   */
   async expiries(asset: string, exchange: string, date: string): Promise<string[]> {
     try {
+      /*
+       * The fast path may not fail the request.
+       *
+       * It threw once — a type mismatch on the partition column that hit MCX
+       * alone — and the exception went straight out through `classify` as
+       * FEED_INTERNAL, so the expiry dropdown was empty for that exchange while
+       * the instrument master underneath could have answered perfectly.
+       *
+       * An optimisation that can take down the thing it optimises is not one.
+       * Caught, reported once, stepped over.
+       */
+      if (hasParquet(exchange)) {
+        const fromParquet = await expiriesParquet(asset, exchange, date).catch((e) => {
+          logNubra.warn(
+            { exchange, asset, err: asError(e) },
+            'parquet expiries failed — falling back to the instrument master',
+          );
+          return null;
+        });
+        if (fromParquet?.length) {
+          return fromParquet.map((x) => normalizeExpiry(x)!).filter(Boolean).sort();
+        }
+      }
+
       const raw = await getCachedExpiries(asset, exchange, date, this.session());
       return raw.map((x) => normalizeExpiry(x)!).filter(Boolean).sort();
     } catch (err) {
@@ -660,7 +704,7 @@ export class NubraFeed implements MarketDataFeed {
         return;
       }
       if (e.event === 'error') {
-        console.warn(`[nubra/live] ${String(e.message || 'bridge error')}`);
+        log.warn(`${String(e.message || 'bridge error')}`);
       }
     };
 
@@ -720,7 +764,7 @@ export class NubraFeed implements MarketDataFeed {
           },
           onEvent,
           (code) => {
-            if (!stopped) console.warn(`[nubra/live] bridge exited (${code ?? 'signal'})`);
+            if (!stopped) log.warn(`bridge exited (${code ?? 'signal'})`);
           },
         );
 
@@ -728,7 +772,7 @@ export class NubraFeed implements MarketDataFeed {
         // this is where that race is closed.
         if (stopped) bridge.stop();
       } catch (err) {
-        if (!stopped) console.warn(`[nubra/live] could not start: ${(err as Error).message}`);
+        if (!stopped) log.warn(`could not start: ${(err as Error).message}`);
       }
     })();
 

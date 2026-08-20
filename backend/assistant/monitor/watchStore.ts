@@ -28,6 +28,10 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Watch } from '../types.js';
 
+import { logger } from '../../lib/logger.js';
+
+const log = logger('iris/watches');
+
 const __dir = dirname(fileURLToPath(import.meta.url));
 
 /**
@@ -75,7 +79,7 @@ function load(): void {
     const parsed = JSON.parse(raw) as Persisted;
     if (parsed?.version === 1 && Array.isArray(parsed.watches)) {
       for (const w of parsed.watches) watches.set(w.id, w);
-      console.log(`[iris/watches] restored ${watches.size} watch(es)`);
+      log.info(`restored ${watches.size} watch(es)`);
     }
   } catch {
     // No file yet, or a corrupt one. Starting empty is the only safe recovery:
@@ -95,7 +99,7 @@ function flush(): void {
     writeFileSync(tmp, JSON.stringify(payload, null, 2), 'utf8');
     renameSync(tmp, path);
   } catch (err) {
-    console.warn(`[iris/watches] could not persist: ${(err as Error).message}`);
+    log.warn(`could not persist: ${(err as Error).message}`);
   }
 }
 

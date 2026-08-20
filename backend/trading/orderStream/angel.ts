@@ -29,6 +29,10 @@ import { resolveContract } from '../contract.js';
 import { ensureConnected } from '../../feeds/authManager.js';
 import type { AngelFeed } from '../../feeds/adapters/angel/index.js';
 
+import { logger, asError } from '../../lib/logger.js';
+
+const log = logger('orderStream/angel');
+
 const ORDER_WS_URL = process.env.ANGEL_ORDER_WS_URL
   || 'wss://tns.angelone.in/smart-order-update';
 
@@ -227,7 +231,7 @@ export class AngelOrderStream {
 
     ws.on('open', () => {
       this.retries = 0;
-      console.log(`[${this.id}/orders] connected`);
+      log.info({ feed: this.id }, 'order stream connected');
       this.startPing();
       this.handlers?.onStatus('connected');
     });
@@ -235,7 +239,10 @@ export class AngelOrderStream {
     ws.on('message', (data: Buffer) => {
       const order = normalizeOrderFrame(data.toString('utf8'));
       if (!order) return;
-      console.log(`[${this.id}/orders] ${order.id} ${order.status} ${order.contract.label}`);
+      log.info(
+        { feed: this.id, order: order.id, status: order.status, contract: order.contract.label },
+        'order update',
+      );
       this.handlers?.onOrder(order);
     });
 
@@ -244,7 +251,7 @@ export class AngelOrderStream {
     // in this handler.
     ws.on('unexpected-response', (_req, res) => {
       const fault = classifyStatus(res.statusCode ?? 0);
-      console.warn(`[${this.id}/orders] ${fault.message}`);
+      log.warn({ feed: this.id, status: res.statusCode, retry: fault.retry }, fault.message);
       if (!fault.retry) {
         this.closed = true;                   // a cap will not clear by retrying
         this.handlers?.onStatus('stopped', fault);
@@ -268,7 +275,7 @@ export class AngelOrderStream {
     this.ws = null;
     this.stopPing();
     if (this.closed) return;
-    console.warn(`[${this.id}/orders] disconnected (${why}) — reconnecting`);
+    log.warn({ feed: this.id, why }, 'order stream disconnected — reconnecting');
     this.handlers?.onStatus('disconnected');
     this.scheduleReconnect();
   }
@@ -317,7 +324,7 @@ export class AngelOrderStream {
         // into two logins for one account.
         await ensureConnected(this.feed);
       } catch (err) {
-        console.warn(`[${this.id}/orders] feed not connected: ${(err as Error).message}`);
+        log.warn({ feed: this.id, err: asError(err) }, 'feed not connected');
       }
     }
     if (this.closed) return;

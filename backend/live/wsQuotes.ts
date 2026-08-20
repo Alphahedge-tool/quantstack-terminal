@@ -40,7 +40,15 @@ import { liveRouter } from '../feeds/liveRouter.js';
 import { instruments } from '../instruments/store.js';
 import { symbolOf } from '../instruments/symbol.js';
 
+import { logger } from '../lib/logger.js';
+import { wsConnections, wsMessages } from '../lib/metrics.js';
+
+const log = logger('ws/quotes');
+
 export const LIVE_QUOTES_PATH = '/ws/live/quotes';
+
+/** Metrics label for this socket. One of a fixed set — see lib/metrics.ts. */
+const CHANNEL = 'quotes';
 
 /**
  * Coalescing window.
@@ -104,6 +112,9 @@ export function attachLiveQuotesSocket(server: http.Server): void {
   });
 
   wss.on('connection', (ws: WebSocket) => {
+    wsConnections.inc({ channel: CHANNEL });
+    ws.on('close', () => wsConnections.dec({ channel: CHANNEL }));
+
     let missedPings = 0;
     let unsubscribe: (() => void) | null = null;
     /** Latest price per symbol since the last flush. */
@@ -111,7 +122,9 @@ export function attachLiveQuotesSocket(server: http.Server): void {
     let flushTimer: NodeJS.Timeout | null = null;
 
     const send = (payload: unknown) => {
-      if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(payload));
+      if (ws.readyState !== ws.OPEN) return;
+      ws.send(JSON.stringify(payload));
+      wsMessages.inc({ channel: CHANNEL, direction: 'out' });
     };
 
     const flush = () => {
@@ -159,7 +172,7 @@ export function attachLiveQuotesSocket(server: http.Server): void {
       const keys = requested.filter((k) => instruments.brokersFor(k).length > 0);
       const dropped = requested.length - keys.length;
       if (dropped) {
-        console.warn(`[ws/quotes] ${dropped} contract(s) not carried by any master — skipped`);
+        log.warn({ dropped, requested: requested.length }, 'contracts not carried by any master — skipped');
       }
 
       if (!keys.length) {
@@ -181,6 +194,7 @@ export function attachLiveQuotesSocket(server: http.Server): void {
     };
 
     ws.on('message', (data: Buffer) => {
+      wsMessages.inc({ channel: CHANNEL, direction: 'in' });
       let msg: { type?: string; keys?: unknown[] };
       try { msg = JSON.parse(data.toString('utf8')); } catch { return; }
 
@@ -211,5 +225,5 @@ export function attachLiveQuotesSocket(server: http.Server): void {
     });
   });
 
-  console.log(`[ws/quotes] listening on ${LIVE_QUOTES_PATH}`);
+  log.info({ path: LIVE_QUOTES_PATH }, 'quotes socket listening');
 }

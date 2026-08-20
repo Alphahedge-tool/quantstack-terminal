@@ -35,6 +35,10 @@ import {
 import { applyModelledVol, type ModelRequest } from '../analytics/volPass.js';
 import { RingBuffer } from './ringBuffer.js';
 
+import { logger } from '../lib/logger.js';
+
+const log = logger('straddle');
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const BAND = 2;   // ATM ± 2 strikes as candidates
@@ -298,8 +302,8 @@ export async function computeRollingStraddle(
   // substitute should be identifiable as one.
   const spotSubstitute = spot.ref.label !== spotRef.label ? spot.ref.label : null;
   if (spotSubstitute) {
-    console.warn(
-      `[straddle] ${exchange} ${symbol} ${date}: no series for ${spotRef.label}, `
+    log.warn(
+      `${exchange} ${symbol} ${date}: no series for ${spotRef.label}, `
       + `using ${spotSubstitute} as the underlying`,
     );
   }
@@ -562,8 +566,8 @@ export async function computeRollingStraddle(
 
   const { entryVega, entryTheta, greekBars, modelledGreekBars } = vol;
   timings.total = Date.now() - t0;
-  console.log(
-    `[straddle] ${exchange} ${symbol} ${expiry} ${date} @${resolvedInterval} — `
+  log.info(
+    `${exchange} ${symbol} ${expiry} ${date} @${resolvedInterval} — `
     + `${points.length} pts, ${optionKeys.length} contracts, ${requiredStrikes.size} strikes, `
     + `greeks ${points.length ? Math.round((greekBars / points.length) * 100) : 0}%`
     + `${greekBars ? ` (${Math.round((modelledGreekBars / greekBars) * 100)}% modelled)` : ''}, `

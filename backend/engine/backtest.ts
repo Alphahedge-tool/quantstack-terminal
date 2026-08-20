@@ -41,6 +41,10 @@ import { computeRollingStraddle } from './rollingStraddle.js';
 import { computeDayMetrics, daysToExpiry, type DayMetrics } from '../analytics/straddleMetrics.js';
 import { computeBacktestStats, type BacktestStats } from '../analytics/backtestStats.js';
 
+import { logger } from '../lib/logger.js';
+
+const log = logger('backtest');
+
 // ─── Disk cache ───────────────────────────────────────────────────────────────
 
 const __dir = path.dirname(fileURLToPath(import.meta.url));
@@ -79,7 +83,7 @@ function writeDayCache(file: string, metrics: DayMetrics): void {
   try {
     fs.writeFileSync(file, JSON.stringify(metrics), 'utf8');
   } catch (e) {
-    console.warn(`[backtest] cache write failed: ${(e as Error).message}`);
+    log.warn(`cache write failed: ${(e as Error).message}`);
   }
 }
 
@@ -345,8 +349,8 @@ export async function runBacktest(
   const filteredOut = skipped.filter((s) => s.filtered).length;
   const failed      = skipped.length - filteredOut;
 
-  console.log(
-    `[backtest] ${exchange} ${symbol} ${options.from}→${options.to} @${interval} — `
+  log.info(
+    `${exchange} ${symbol} ${options.from}→${options.to} @${interval} — `
     + `${days.length}/${dates.length} matched (${computed} computed, ${fromCache} cached), `
     + `${filteredOut} filtered out, ${failed} failed, ${elapsedMs}ms`,
   );

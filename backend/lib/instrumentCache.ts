@@ -14,6 +14,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { NubraSession }    from '../brokers/nubra.js';
 import { nubraFetch, withRetry, toRupees } from './nubraData.js';
+import { writeMasterParquet, pruneExpiredParquet } from './parquetStore.js';
+
+import { logger, asError } from './logger.js';
+import { refdataFetches, refdataDuration, cacheAccess } from './metrics.js';
+
+const log = logger('instrument-cache');
+const logParquet = logger('parquet');
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -47,7 +54,59 @@ interface CacheSlot {
   fetchedAt:   number;
 }
 
+/**
+ * Resident instrument masters, LRU-bounded.
+ *
+ * ── Why this has a cap at all ──
+ *
+ * It did not, and that was enough to kill the process. One slot is an entire
+ * exchange's instrument master: ~81,000 parsed rows, measured at **23 MB of
+ * resident heap** (`scripts/probeMemory.ts`), on top of a transient spike while
+ * the 43 MB JSON file is read and parsed.
+ *
+ * Two or three slots is what normal use touches — today's NSE, BSE and MCX — so
+ * an unbounded Map looked fine indefinitely. Then the DTE-median compare walked
+ * back through the calendar one day at a time, asking for the expiry list as of
+ * each candidate date, and every one of those loaded another master that was
+ * then never released. Twenty-five candidates is ~800 MB resident plus the
+ * parse spikes, against a 4.05 GB heap already holding session walks. The
+ * backend died mid-compare.
+ *
+ * ── Why eight ──
+ *
+ * Three for today's warmed exchanges, leaving five for whatever history is
+ * being looked at, which covers a cohort scan's working set without the whole
+ * cap being churned by it. An evicted slot is not lost — it is on disk and
+ * reloads without a network call.
+ */
+const MAX_RESIDENT_SLOTS = Math.max(
+  3, Number(process.env.QT_INSTRUMENT_CACHE_SLOTS) || 8,
+);
+
 const memCache = new Map<string, CacheSlot>();
+
+/**
+ * Mark a slot as most-recently-used, then evict down to the cap.
+ *
+ * A `Map` iterates in insertion order, so delete-then-set is what makes it an
+ * LRU rather than a FIFO — without the delete, a slot loaded once and read a
+ * thousand times would still be evicted before one loaded later and never
+ * touched again.
+ */
+function touch(key: string, slot: CacheSlot): void {
+  memCache.delete(key);
+  memCache.set(key, slot);
+
+  while (memCache.size > MAX_RESIDENT_SLOTS) {
+    const oldest = memCache.keys().next().value;
+    if (oldest === undefined) break;
+    memCache.delete(oldest);
+    log.debug(
+      { evicted: oldest, resident: memCache.size, max: MAX_RESIDENT_SLOTS },
+      'evicted a refdata slot',
+    );
+  }
+}
 
 // ── Disk cache dir ─────────────────────────────────────────────────────────
 
@@ -168,7 +227,7 @@ function buildEligible(rows: InstrumentRow[], exchange: string): Map<string, Str
 async function fetchAndCache(
   exchange: string, date: string, session: NubraSession,
 ): Promise<CacheSlot> {
-  console.log(`[instrument-cache] Downloading ${exchange} refdata for ${date}…`);
+  log.info({ exchange, date }, 'downloading refdata');
   const t0 = Date.now();
 
   const raw = await withRetry(() =>
@@ -190,27 +249,52 @@ async function fetchAndCache(
   // Returning an uncached empty slot costs one cheap request (~200ms, the
   // payload is empty) and keeps a recoverable failure recoverable.
   if (!rawRows.length) {
-    console.warn(
-      `[instrument-cache] ${exchange} ${date}: empty refdata — NOT cached, `
-      + `will retry on next request (${Date.now() - t0}ms)`,
+    refdataFetches.inc({ exchange, outcome: 'empty' });
+    refdataDuration.observe({ exchange }, (Date.now() - t0) / 1000);
+    log.warn(
+      { exchange, date, tookMs: Date.now() - t0 },
+      'empty refdata — not cached, will retry on next request',
     );
     return { rows: [], eligibleMap: new Map(), fetchedAt: 0 };
   }
 
-  console.log(
-    `[instrument-cache] ${exchange} ${date}: ${rows.length} rows, ` +
-    `${eligible.size} straddle-eligible assets — ${Date.now() - t0}ms`,
+  refdataFetches.inc({ exchange, outcome: 'success' });
+  refdataDuration.observe({ exchange }, (Date.now() - t0) / 1000);
+  log.info(
+    { exchange, date, rows: rows.length, eligible: eligible.size, tookMs: Date.now() - t0 },
+    `${rows.length} instruments loaded`,
   );
 
   // Persist to disk
+  const jsonPath = diskPath(exchange, date);
   try {
-    fs.writeFileSync(diskPath(exchange, date), JSON.stringify(rawRows), 'utf8');
+    fs.writeFileSync(jsonPath, JSON.stringify(rawRows), 'utf8');
   } catch (e) {
-    console.warn(`[instrument-cache] Disk write failed: ${(e as Error).message}`);
+    log.warn({ exchange, date, err: asError(e) }, 'refdata disk write failed');
   }
 
+  /*
+   * Then the same master as Parquet, partitioned by expiry.
+   *
+   * Fire-and-forget, and deliberately so: this runs inside a login warm that
+   * the server does not wait for, and a conversion that failed — a locked file,
+   * a full disk — must not take down the login it is riding on. The JSON on
+   * disk stays authoritative either way, so the worst case is a stale partition
+   * and a warning, not a broken session.
+   */
+  void writeMasterParquet(exchange, jsonPath)
+    .then((result) => {
+      if (!result) return;
+      logParquet.info(
+        `${result.exchange}: ${result.expiries} expiries, `
+        + `${result.rows.toLocaleString('en-IN')} rows, `
+        + `${(result.bytes / 1048576).toFixed(1)} MB — ${result.tookMs}ms`,
+      );
+    })
+    .catch((e) => logParquet.warn(`${exchange} write failed: ${(e as Error).message}`));
+
   const slot: CacheSlot = { rows, eligibleMap: eligible, fetchedAt: Date.now() };
-  memCache.set(`${exchange}|${date}`, slot);
+  touch(`${exchange}|${date}`, slot);
   return slot;
 }
 
@@ -221,9 +305,13 @@ const inflight = new Map<string, Promise<CacheSlot>>();
 async function getSlot(exchange: string, date: string, session: NubraSession): Promise<CacheSlot> {
   const key = `${exchange.toUpperCase()}|${date}`;
 
-  // 1. Memory cache
+  // 1. Memory cache. Touched on read as well as on write — see `touch`.
   const mem = memCache.get(key);
-  if (mem) return mem;
+  if (mem) {
+    touch(key, mem);
+    cacheAccess.inc({ cache: 'refdata', outcome: 'memory' });
+    return mem;
+  }
 
   // 2. Disk cache
   const dPath = diskPath(exchange.toUpperCase(), date);
@@ -235,18 +323,19 @@ async function getSlot(exchange: string, date: string, session: NubraSession): P
       // those). Deleting it here means the range self-heals on the next run
       // instead of needing a manual cache wipe.
       if (!Array.isArray(rawRows) || !rawRows.length) {
-        console.warn(`[instrument-cache] ${exchange} ${date}: empty cache file — removing, will refetch`);
+        log.warn({ exchange, date }, 'empty cache file — removing, will refetch');
         try { fs.unlinkSync(dPath); } catch { /* best effort */ }
       } else {
         const rows     = parseRows(rawRows, exchange);
         const eligible = buildEligible(rows, exchange);
         const slot: CacheSlot = { rows, eligibleMap: eligible, fetchedAt: Date.now() };
-        memCache.set(key, slot);
-        console.log(`[instrument-cache] ${exchange} ${date}: loaded ${rows.length} rows from disk`);
+        touch(key, slot);
+        cacheAccess.inc({ cache: 'refdata', outcome: 'disk' });
+        log.info({ exchange, date, rows: rows.length, source: 'disk' }, `${rows.length} instruments loaded`);
         return slot;
       }
     } catch (e) {
-      console.warn(`[instrument-cache] Disk load failed: ${(e as Error).message}`);
+      log.warn({ exchange, date, err: asError(e) }, 'refdata disk load failed');
     }
   }
 
@@ -515,12 +604,24 @@ export function warmInstrumentCache(session: NubraSession): Promise<void> {
 
   warmPromise = Promise.allSettled(
     WARM_EXCHANGES.map((ex) => getSlot(ex, today, session).catch((e) => {
-      console.warn(`[instrument-cache] Warm ${ex} failed: ${(e as Error).message}`);
+      log.warn({ exchange: ex, err: asError(e) }, 'warm failed');
     })),
   ).then(() => {
-    console.log(
-      `[instrument-cache] Warm complete — ${cacheStats().cached} exchange/date slots cached`,
-    );
+    log.info({ slots: cacheStats().cached }, 'instrument warm complete');
+    /*
+     * Prune once a warm, which is once a login and therefore once a day.
+     *
+     * Here rather than on a timer: an expiry passing is a daily event, and a
+     * process that stays up over a weekend has nothing to prune until it warms
+     * again anyway. Synchronous — it is a handful of directory removals — and
+     * wrapped, because losing a login to a file-permissions error on a cleanup
+     * would be a poor trade.
+     */
+    try {
+      pruneExpiredParquet();
+    } catch (e) {
+      logParquet.warn(`prune failed: ${(e as Error).message}`);
+    }
   });
 
   return warmPromise;
@@ -552,5 +653,9 @@ export function cacheStats() {
       fetchedAt: slot.fetchedAt,
     });
   }
-  return { cached: entries.length, entries };
+  return {
+    cached: entries.length,
+    limit: MAX_RESIDENT_SLOTS,
+    entries,
+  };
 }

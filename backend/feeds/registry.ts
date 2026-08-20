@@ -15,6 +15,10 @@ import { angelFeed }   from './adapters/angel/index.js';
 import { zerodhaFeed } from './adapters/zerodha/index.js';
 import { kotakFeed }   from './adapters/kotak/index.js';
 
+import { logger } from '../lib/logger.js';
+
+const log = logger('feeds');
+
 export interface RegisteredFeed {
   feed:     MarketDataFeed;
   priority: number;
@@ -106,8 +110,9 @@ export function feeds(): RegisteredFeed[] {
     }))
     .sort((a, b) => a.priority - b.priority);
 
-  console.log(
-    `[feeds] registered: ${registry.map((r) => `${r.feed.id}(${r.priority})`).join(' → ')}`,
+  log.info(
+    { feeds: registry.map((r) => ({ id: r.feed.id, priority: r.priority })) },
+    `feeds registered: ${registry.map((r) => r.feed.id).join(' → ')}`,
   );
   return registry;
 }
