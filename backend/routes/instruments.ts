@@ -2,7 +2,21 @@
  * Instrument routes:
  *   GET /api/instruments/search   ?q=&exchange=
  *   GET /api/instruments/expiries ?symbol=&exchange=&date=
- *   GET /api/instruments/status   → cache statistics
+ *   GET /api/instruments/cache-status → instrument cache statistics
+ *
+ * `cache-status` rather than `status`, because `status` is taken.
+ *
+ * routes/feeds.ts registers GET /api/instruments/status for canonical master
+ * coverage per broker, and this file used to register the SAME method and path
+ * for cache statistics. The old router was a `Map` keyed on `METHOD path`, so
+ * the second registration silently replaced the first and one of the two
+ * handlers was unreachable — main.ts imports this file before feeds.ts, so the
+ * broker-coverage one has been the live endpoint and this one never ran.
+ *
+ * Fastify rejects a duplicate route at boot instead of quietly dropping one,
+ * which is how it surfaced. The live response is left exactly as it was; this
+ * one moves to the name the codebase already uses for the same idea, alongside
+ * /api/straddle/cache-status and /api/backtest/cache-status.
  */
 
 import { route, ApiError } from '../server.js';
@@ -87,7 +101,7 @@ route('GET', '/api/instruments/expiries', async (_req, _res, { query }) => {
   return { status: true, symbol, exchange, date, expiries };
 });
 
-// GET /api/instruments/status
-route('GET', '/api/instruments/status', () => {
+// GET /api/instruments/cache-status
+route('GET', '/api/instruments/cache-status', () => {
   return { status: true, ...cacheStats() };
 });
