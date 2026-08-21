@@ -376,21 +376,57 @@ export class NubraFeed implements MarketDataFeed {
        * An optimisation that can take down the thing it optimises is not one.
        * Caught, reported once, stepped over.
        */
-      if (hasParquet(exchange)) {
-        const fromParquet = await expiriesParquet(asset, exchange, date).catch((e) => {
+      const tryParquet = async (): Promise<string[] | null> => {
+        if (!hasParquet(exchange)) return null;
+        const rows = await expiriesParquet(asset, exchange, date).catch((e) => {
           logNubra.warn(
             { exchange, asset, err: asError(e) },
             'parquet expiries failed — falling back to the instrument master',
           );
           return null;
         });
-        if (fromParquet?.length) {
-          return fromParquet.map((x) => normalizeExpiry(x)!).filter(Boolean).sort();
-        }
+        if (!rows?.length) return null;
+        return rows.map((x) => normalizeExpiry(x)!).filter(Boolean).sort();
+      };
+
+      /*
+       * ── Why a past date does not use the parquet store first ──
+       *
+       * The store is partitioned by expiry and holds only the partitions it was
+       * written with, so it can answer "what is listed now" exactly and "what
+       * was listed on a past date" only by accident. Asking it about 11 Aug
+       * returned 25 Aug onward — every partition that had not expired yet — and
+       * silently omitted the 11th and the 18th, whose partitions were never
+       * written. Those are precisely the contracts a replay of the 11th is
+       * about: the front expiry and the one behind it.
+       *
+       * It was invisible because the answer was non-EMPTY. The old code took any
+       * non-empty parquet result and returned it, so the instrument master —
+       * which is cached per trading day and had all three expiries — was never
+       * consulted. A shorter dropdown is not an error anyone sees.
+       *
+       * So: today (or a future date) still takes the fast path, because for
+       * those the store is authoritative and this is the hot call. A past date
+       * goes to the per-day master, which is what "as of that day" means.
+       */
+      const asOf = (normalizeExpiry(date) ?? date.replace(/-/g, '')).trim();
+      const historical = asOf !== '' && asOf < istDate(Date.now()).replace(/-/g, '');
+
+      if (!historical) {
+        const fast = await tryParquet();
+        if (fast) return fast;
       }
 
       const raw = await getCachedExpiries(asset, exchange, date, this.session());
-      return raw.map((x) => normalizeExpiry(x)!).filter(Boolean).sort();
+      const fromMaster = raw.map((x) => normalizeExpiry(x)!).filter(Boolean).sort();
+      if (fromMaster.length) return fromMaster;
+
+      /*
+       * A past date with no master cached for it — a machine that was not
+       * running that day. The store's partial view is then the only thing left,
+       * and a dropdown missing its front expiry still beats an empty one.
+       */
+      return (historical ? await tryParquet() : null) ?? [];
     } catch (err) {
       throw classify(err, this.id);
     }
