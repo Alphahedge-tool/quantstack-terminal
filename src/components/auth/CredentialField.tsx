@@ -53,7 +53,10 @@ export function CredentialField({
           id={id}
           type={secret && !revealed ? 'password' : 'text'}
           inputMode={field.type === 'number' ? 'numeric' : undefined}
-          placeholder={field.placeholder}
+          // A stored secret arrives as a name with no value, so the ordinary
+          // placeholder ("4-digit MPIN") would read as an empty field that
+          // still needs typing. Dots say "held, and not shown to a browser".
+          placeholder={filled && !value ? '••••••••' : field.placeholder}
           value={value}
           onChange={(event) => onChange(event.target.value)}
           autoComplete="off"

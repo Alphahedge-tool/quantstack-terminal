@@ -664,7 +664,9 @@ function AddAccountView({
     setAutoLogin(chosen.autoLogin);
   }
 
-  const gaps = broker && chosen ? missingFields(values, broker.fields) : null;
+  const gaps = broker && chosen
+    ? missingFields(values, broker.fields, chosen.stored)
+    : null;
 
   function reset() {
     setStep(1);
@@ -845,7 +847,10 @@ function AddAccountView({
                     key={field.key}
                     field={field}
                     value={values[field.key] ?? ''}
-                    filled={Boolean(chosen?.fields[field.key])}
+                    filled={
+                      Boolean(chosen?.fields[field.key])
+                      || Boolean(chosen?.stored.includes(field.key))
+                    }
                     onChange={(value) =>
                       setValues((current) => ({ ...current, [field.key]: value }))
                     }

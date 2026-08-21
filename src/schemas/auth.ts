@@ -22,8 +22,10 @@ import { BROKER_IDS, type BrokerId } from '@/lib/brokers';
  * "nothing stored" apart from "stored blank". Pinning it to a closed object
  * would force empty strings back in and lose that distinction.
  *
- * These values are SECRETS — MPINs, TOTP secrets, API secrets. They are fetched
- * only once a broker has actually been chosen.
+ * `fields` holds only NON-SECRET values — client codes, mobile numbers, API
+ * keys. A secret the row does hold is named in `stored` and its value stays on
+ * the server, so a form can show "MPIN — stored" without the MPIN ever reaching
+ * a browser.
  */
 export const savedAccountSchema = z
   .object({
@@ -39,6 +41,8 @@ export const savedAccountSchema = z
     enabled: z.boolean().default(false),
     autoLogin: z.boolean().default(false),
     fields: z.record(z.string()).default({}),
+    /** Field keys the row has a secret for. Names only, never values. */
+    stored: z.array(z.string()).default([]),
     updatedAt: z.string().default(''),
   })
   .passthrough();

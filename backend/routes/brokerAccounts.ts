@@ -5,17 +5,21 @@
  * Picking a broker in the UI should fill the form in, not ask you to retype an
  * MPIN and a base32 TOTP secret that are already sitting in `broker_accounts`.
  *
- * ── This route returns SECRETS ──
+ * ── This route returns NO secrets ──
  *
- * `lib/supabase.ts` says credentials flow one way and no route returns a
- * credential field. This route is the deliberate exception, and it is the only
- * one: it hands the browser MPINs, TOTP secrets and API secrets so the form can
- * be pre-filled. That is safe for a terminal on localhost and NOT safe on a
- * host anyone else can reach — there is no auth in front of it, so exposing the
- * port exposes every broker credential in the table.
+ * It used to hand the browser MPINs, TOTP secrets and API secrets to pre-fill
+ * the form, which was defensible while the terminal was localhost-only and
+ * became a credential dump the moment it was reachable from a network — there
+ * is no auth in front of it.
  *
- * The Supabase SERVICE KEY still never leaves the backend. Only the row values
- * do, and only for brokers the UI knows how to ask about.
+ * Secret VALUES are now replaced by `stored`, a list of the keys a row has a
+ * secret for. The form pre-fills and marks those fields "stored" exactly as
+ * before, because it never needed the values: `save()` in LoginPage sends an
+ * identity and an account id, never a credential, and auto-login reads Supabase
+ * server-side. Nothing downstream was using them.
+ *
+ * The Supabase SERVICE KEY has never left the backend, and now neither does any
+ * credential it fetches.
  *
  * ── Why the mapping lives here ──
  *
@@ -25,7 +29,7 @@
  * knowledge, and means a column rename is one edit rather than five.
  */
 
-import { route } from '../server.js';
+import { route, ApiError } from '../server.js';
 import { listBrokerAccounts } from '../lib/credentialStore.js';
 import type { BrokerAccountRow } from '../lib/supabase.js';
 
@@ -108,6 +112,19 @@ function fieldsFor(ui: string, row: BrokerAccountRow): Record<string, string> {
   return out;
 }
 
+/**
+ * Field keys whose VALUE never leaves the server.
+ *
+ * Mirrors the `password` and `totp_secret` field types in `src/lib/brokers.ts`.
+ * Everything else — an API key, a client code, a mobile number — identifies the
+ * account rather than authenticating it, and the form genuinely needs those:
+ * `identityFrom` in LoginPage reads `client_id` / `user_id` / `phone` to work
+ * out which account is being linked.
+ */
+const SECRET_KEYS = new Set([
+  'api_secret', 'consumer_secret', 'pin', 'mpin', 'totp_secret', 'password',
+]);
+
 export interface SavedAccount {
   id:        string;
   broker:    string;
@@ -118,13 +135,30 @@ export interface SavedAccount {
   env:       string;
   enabled:   boolean;
   autoLogin: boolean;
-  /** Credential values, keyed as the connect form names them. */
+  /** Non-secret values, keyed as the connect form names them. */
   fields:    Record<string, string>;
+  /**
+   * Keys the row HAS a secret for, without the secret itself.
+   *
+   * This is what lets the form say "MPIN — stored" and stop asking, which is
+   * the whole job the plaintext value used to do. The browser is told a secret
+   * exists; it is not told what it is.
+   */
+  stored:    string[];
   updatedAt: string;
 }
 
 function toSaved(ui: string, row: BrokerAccountRow): SavedAccount {
   const clientCode = str(row.client_code) || str(row.username);
+  const all = fieldsFor(ui, row);
+
+  const fields: Record<string, string> = {};
+  const stored: string[] = [];
+  for (const [key, value] of Object.entries(all)) {
+    if (SECRET_KEYS.has(key)) stored.push(key);
+    else fields[key] = value;
+  }
+
   return {
     id:         row.id,
     broker:     ui,
@@ -133,7 +167,8 @@ function toSaved(ui: string, row: BrokerAccountRow): SavedAccount {
     env:        str(row.broker_env).toUpperCase() === 'UAT' ? 'UAT' : 'PROD',
     enabled:    Boolean(row.enabled),
     autoLogin:  Boolean(row.auto_login),
-    fields:     fieldsFor(ui, row),
+    fields,
+    stored,
     updatedAt:  str(row.updated_at),
   };
 }

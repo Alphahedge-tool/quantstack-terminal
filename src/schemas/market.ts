@@ -393,11 +393,60 @@ export const liveFrameSchema = z.union([
   }),
 ]);
 
+/* ── Live straddle frames (`/ws/live/straddle`) ───────────────────────────── */
+
+export const rollEventSchema = z
+  .object({
+    time: z.number(),
+    fromStrike: z.number().nullable().optional(),
+    toStrike: z.number().nullable().optional(),
+  })
+  .passthrough();
+
+/**
+ * Server → client frames for the session chart's live tail.
+ *
+ * `backfill` answers a `since` after a reconnect and carries `complete`, which
+ * is the frame that matters most: false means the gap is older than the
+ * engine's retained window, so splicing would leave a hole and the client must
+ * refetch history instead. Same fallback rule as the quote channel — an
+ * unmodelled event is skipped, never thrown over.
+ */
+export const straddleFrameSchema = z.union([
+  z.object({
+    event: z.literal('point'),
+    point: straddlePointSchema,
+    roll: rollEventSchema.nullable().optional(),
+  }),
+  z.object({
+    event: z.literal('backfill'),
+    points: z.array(straddlePointSchema).default([]),
+    rolls: z.array(rollEventSchema).default([]),
+    complete: z.boolean().default(false),
+  }),
+  z.object({
+    event: z.literal('status'),
+    status: z.string(),
+    message: z.string().optional(),
+  }),
+  z.object({
+    event: z.literal('error'),
+    message: z.string().default('Live feed error'),
+    code: z.string().optional(),
+  }),
+  z.object({
+    event: z.literal('pong'),
+    t: z.number().optional(),
+  }),
+]);
+
 export type Instrument = z.infer<typeof instrumentSchema>;
 export type Feed = z.infer<typeof feedSchema>;
 export type Quote = z.infer<typeof quoteSchema>;
 export type LiveFrame = z.infer<typeof liveFrameSchema>;
 export type StraddlePoint = z.infer<typeof straddlePointSchema>;
+export type StraddleFrame = z.infer<typeof straddleFrameSchema>;
+export type RollEvent = z.infer<typeof rollEventSchema>;
 export type StraddleHistory = z.infer<typeof straddleHistoryResponse>;
 export type BandGreeksPoint = z.infer<typeof bandGreeksPointSchema>;
 export type BandGreeks = z.infer<typeof bandGreeksResponse>;

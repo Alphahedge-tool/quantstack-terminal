@@ -174,3 +174,14 @@ export function contractLabel(contract: {
     .filter((p) => p !== undefined && p !== null && p !== '');
   return parts.length ? parts.join(' ') : EMPTY;
 }
+
+/**
+ * Today in IST, as `YYYY-MM-DD`.
+ *
+ * `toISOString()` would give the UTC day, which before 05:30 IST is yesterday —
+ * enough to make the terminal treat the session someone is sitting in as
+ * history and refuse to stream it.
+ */
+export function istToday(): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
+}

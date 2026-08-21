@@ -197,8 +197,17 @@ export function canonicalBroker(raw: string | null | undefined): BrokerId | null
 export function missingFields(
   values: Record<string, string>,
   fields: BrokerField[],
+  /**
+   * Keys held server-side as secrets. Their values are deliberately absent from
+   * `values`, so without this every stored MPIN would be reported as missing —
+   * sending someone to fix a row that is already correct.
+   */
+  stored: readonly string[] = [],
 ): { missing: string[]; manual: string[] } {
-  const empty = fields.filter((f) => !String(values[f.key] ?? '').trim());
+  const held = new Set(stored);
+  const empty = fields.filter(
+    (f) => !held.has(f.key) && !String(values[f.key] ?? '').trim(),
+  );
   return {
     missing: empty.filter((f) => f.storable !== false).map((f) => f.label),
     manual: empty.filter((f) => f.storable === false).map((f) => f.label),

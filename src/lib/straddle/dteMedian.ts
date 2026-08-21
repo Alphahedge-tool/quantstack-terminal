@@ -425,6 +425,19 @@ export interface ComparePoint {
 export function projectToPoints(
   profile: MedianProfile,
   todayFirstMillis: number,
+  /**
+   * Last timestamp today's session has actually reached, in epoch millis.
+   *
+   * The cohort is a FULL day and today is not, so projecting the whole profile
+   * draws the median out to 15:30 while the candles stop at the current minute.
+   * That reads as a forecast — a line the chart appears to be predicting into —
+   * when it is only the shape of days already finished. Clipping keeps the
+   * overlay a comparison against what has happened, and as the live tail
+   * advances the line extends with it, one minute at a time.
+   *
+   * Omitted for a completed session, where the whole profile is legitimate.
+   */
+  untilMillis?: number,
 ): ComparePoint[] {
   if (!Number.isFinite(todayFirstMillis)) return [];
 
@@ -434,11 +447,19 @@ export function projectToPoints(
   const istMidnight = Math.floor(istMillis / 86_400_000) * 86_400_000;
   const utcMidnight = istMidnight - IST_OFFSET_MIN * 60_000;
 
-  return profile.points.map((point) => ({
-    time: Math.floor((utcMidnight + point.minute * 60_000) / 1000),
-    value: point.median,
-    lo: point.lo,
-    hi: point.hi,
-    n: point.n,
-  }));
+  const out: ComparePoint[] = [];
+  for (const point of profile.points) {
+    const millis = utcMidnight + point.minute * 60_000;
+    // The profile is ordered by minute, so the first minute past the session's
+    // reach ends it — no need to test the rest.
+    if (untilMillis !== undefined && millis > untilMillis) break;
+    out.push({
+      time: Math.floor(millis / 1000),
+      value: point.median,
+      lo: point.lo,
+      hi: point.hi,
+      n: point.n,
+    });
+  }
+  return out;
 }
