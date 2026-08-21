@@ -8,6 +8,8 @@
     "dev": "node scripts/dev.mjs",
     "start": "node scripts/dev.mjs",
     "dev:go": "node scripts/dev.mjs --go",
+    "dev:all": "node scripts/dev.mjs --all",
+    "dev:marketd": "node scripts/dev.mjs --marketd",
     "dev:web": "vite",
     "dev:api": "npm --prefix backend run dev",
     "build": "tsc -b && vite build",

@@ -12,7 +12,9 @@
  * have an answer.
  */
 
-import { route, readJSON, ApiError } from '../server.js';
+import { route, readJSON, ApiError, getPort } from '../server.js';
+import { goComputeStatus } from '../lib/computeClient.js';
+import { goEngineStatus } from '../lib/engineClient.js';
 import { feeds, feedById } from '../feeds/registry.js';
 import { authStatus, ensureConnected, signOut } from '../feeds/authManager.js';
 import { status as breakerStatus, reset as breakerReset } from '../feeds/breaker.js';
@@ -127,4 +129,27 @@ route('POST', '/api/feeds/live/rotate', async () => {
 route('GET', '/api/instruments/status', () => ({
   status: true,
   brokers: instruments.status(),
+}));
+
+/**
+ * GET /api/services — is the whole stack actually wired together?
+ *
+ * `npm run dev:all` starts four processes, and three of them can be running
+ * perfectly while the backend talks to none of them: the sidecars are opt-in
+ * through `QT_GO_COMPUTE` / `QT_GO_ENGINE`, so a stack where the flags did not
+ * reach the API child looks completely healthy and is simply doing all the work
+ * in Node. That failure is invisible from every other endpoint.
+ *
+ * `goComputeStatus()` and `goEngineStatus()` were both written for a health
+ * route that did not exist yet. This is it.
+ *
+ *   enabled  the backend was told to use it
+ *   healthy  the last probe succeeded — null means it has not been asked yet,
+ *            which is the normal state until the first batch needs it
+ */
+route('GET', '/api/services', () => ({
+  status: true,
+  api: { port: getPort(), pid: process.pid },
+  compute: goComputeStatus(),
+  engine: goEngineStatus(),
 }));

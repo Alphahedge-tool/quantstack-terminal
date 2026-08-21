@@ -59,8 +59,20 @@ const backend = path.join(root, 'backend');
 const goRoot = path.join(root, 'backend-go');
 const require = createRequire(import.meta.url);
 
-/** `npm run dev:go`, or `npm run dev -- --go`. */
-const withGo = process.argv.includes('--go');
+/*
+ * Which sidecars to bring up.
+ *
+ * `--all` is the "run everything" switch: both Go services plus the stack.
+ * The individual flags stay because the two sidecars fail independently and are
+ * useful independently — `computed` is a pricing helper, `marketd` is a market
+ * engine, and wanting one is not wanting the other.
+ *
+ * `--go` keeps its original meaning (the compute sidecar), so `npm run dev:go`
+ * behaves exactly as it did.
+ */
+const withAll     = process.argv.includes('--all');
+const withGo      = withAll || process.argv.includes('--go');
+const withMarketd = withAll || process.argv.includes('--marketd');
 
 /**
  * The sidecar's port, passed to BOTH children.
@@ -70,6 +82,13 @@ const withGo = process.argv.includes('--go');
  * environment and the pair moves together.
  */
 const goPort = process.env.QT_GO_COMPUTE_PORT || '3151';
+
+/**
+ * The market engine's port. Same contract as `goPort`: this script is the one
+ * place that knows marketd's bind port and the backend's dial port are the same
+ * number, so setting it here moves the pair together.
+ */
+const marketdPort = process.env.QT_MARKETD_PORT || '3152';
 
 /** A package's executable entry, resolved from wherever it is installed. */
 function binOf(pkg, from, fallback) {
@@ -85,6 +104,9 @@ const TAGS = {
   api: '\x1b[36m',
   web: '\x1b[33m',
   go: '\x1b[35m',
+  // Green, so the two Go services are never mistaken for each other in a
+  // scrolling log — they fail in different ways and for different reasons.
+  mkt: '\x1b[32m',
 };
 const DIM = '\x1b[2m';
 const RESET = '\x1b[0m';
@@ -313,6 +335,9 @@ if (!await clearPort('api', apiPort, '/api/health', 'qt-backend')) process.exit(
 if (withGo && !await clearPort('go', goPort, '/health', 'quantstack-compute')) {
   process.stdout.write(`${TAGS.go}[go]${RESET} ${DIM}starting without the sidecar${RESET}\n`);
 }
+if (withMarketd && !await clearPort('mkt', marketdPort, '/health', 'marketd')) {
+  process.stdout.write(`${TAGS.mkt}[mkt]${RESET} ${DIM}starting without the market engine${RESET}\n`);
+}
 
 /* ── Launch ─────────────────────────────────────────────────────────────── */
 
@@ -328,11 +353,26 @@ if (withGo && !await clearPort('go', goPort, '/health', 'quantstack-compute')) {
  * filename through PATH and does not apply PATHEXT, so a bare 'go' would be
  * ENOENT on a machine that has Go installed and working.
  */
+const goExe = process.platform === 'win32' ? 'go.exe' : 'go';
+
 const goReady = withGo && !ownersOf(goPort).length;
 if (goReady) {
-  run('go', process.platform === 'win32' ? 'go.exe' : 'go',
-    ['run', './cmd/computed'], goRoot,
+  run('go', goExe, ['run', './cmd/computed'], goRoot,
     { optional: true, env: { QT_GO_COMPUTE_PORT: goPort } });
+}
+
+/*
+ * The market engine, on the same terms as the compute sidecar.
+ *
+ * Also `optional`: marketd owns the live feed and its own straddle engine, but
+ * the Node backend does the same work itself whenever `QT_GO_ENGINE` is unset —
+ * see backend/lib/engineClient.ts. Taking the whole stack down because a helper
+ * failed to compile would turn an optimisation into a hard dependency.
+ */
+const marketdReady = withMarketd && !ownersOf(marketdPort).length;
+if (marketdReady) {
+  run('mkt', goExe, ['run', './cmd/marketd'], goRoot,
+    { optional: true, env: { QT_MARKETD_PORT: marketdPort } });
 }
 
 /*
@@ -356,8 +396,21 @@ if (goReady) {
  * be done in one order or the other and the sidecar would sit idle while
  * everything looked correct.
  */
+/*
+ * The enable flags are set HERE, not left to the shell.
+ *
+ * One switch both starts a sidecar and points the backend at it. Two steps
+ * would eventually be done in one order or the other, and the sidecar would sit
+ * idle while everything looked correct — the failure mode being a stack that is
+ * simply slower than it should be, with nothing in the log saying so.
+ */
+const apiEnv = {
+  ...(goReady      ? { QT_GO_COMPUTE: '1', QT_GO_COMPUTE_PORT: goPort } : {}),
+  ...(marketdReady ? { QT_GO_ENGINE: '1', QT_MARKETD_PORT: marketdPort } : {}),
+};
+
 start('api', binOf('tsx', backend, './dist/cli.mjs'), ['watch', 'main.ts'], backend,
-  goReady ? { env: { QT_GO_COMPUTE: '1', QT_GO_COMPUTE_PORT: goPort } } : undefined);
+  Object.keys(apiEnv).length ? { env: apiEnv } : undefined);
 
 /** Resolves when something accepts a TCP connection on the port. */
 function listening(port) {
@@ -382,4 +435,17 @@ for (let i = 0; i < 40 && !stopping; i += 1) {
   if (await listening(apiPort)) break;
   await sleep(250);
 }
-if (!stopping) start('web', binOf('vite', root, 'bin/vite.js'), [], root);
+/*
+ * LAN exposure.
+ *
+ * `--host` makes Vite listen on every interface, so the terminal is reachable
+ * from other machines at http://<this-machine>:5273. Only the FRONTEND is
+ * exposed: the backend stays bound to 127.0.0.1 and is reached through Vite's
+ * `/api` and `/ws` proxy, which keeps the one open port on the LAN a port that
+ * serves the app rather than the raw API.
+ *
+ * `QT_EXPOSE=0 npm run dev` goes back to a localhost-only terminal.
+ */
+const EXPOSE = process.env.QT_EXPOSE !== '0';
+
+if (!stopping) start('web', binOf('vite', root, 'bin/vite.js'), EXPOSE ? ['--host'] : [], root);
