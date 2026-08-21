@@ -173,3 +173,53 @@ export const expiryReplayResponse = z
   .passthrough();
 
 export type ExpiryReplay = z.infer<typeof expiryReplayResponse>;
+
+/* ── Live cockpit frames (`/ws/expiry`) ───────────────────────────────────── */
+
+/**
+ * Server → client frames for the live cockpit.
+ *
+ * The `state` frame is the REST body minus its `status: true` envelope — the
+ * socket carries the event name instead, and reusing the same shape here is
+ * what lets the page render a pushed frame and a polled response through one
+ * code path.
+ *
+ * Every state frame is the whole state except `bars`, which arrives as a tail
+ * to be spliced — the series reaches ~147 KB by 15:30 and gains one minute at a
+ * time, so resending it every second would be most of the wire. There is still
+ * no backfill and no gap handling: a fresh socket is sent a full series, so a
+ * reconnect heals itself. Unmodelled events parse to null and are skipped
+ * rather than thrown over, same rule as the quote channel — the server may add
+ * frames this build does not read.
+ */
+export const expiryFrameSchema = z.union([
+  expiryStateResponse.omit({ status: true }).extend({
+    event: z.literal('state'),
+    /**
+     * How to apply `bars` — see wsExpiry.ts.
+     *
+     * `barsFull` true means `bars` is the whole series; false means it is the
+     * tail starting at `barsFrom` and the client splices. Both DEFAULT to a
+     * full replace, so a frame from a server that does not send them is handled
+     * as a plain whole-state update rather than silently mis-splicing.
+     */
+    barsFrom: z.number().default(0),
+    barsFull: z.boolean().default(true),
+  }),
+  z.object({
+    event: z.literal('status'),
+    status: z.string(),
+    message: z.string().optional(),
+  }),
+  z.object({
+    event: z.literal('error'),
+    message: z.string().default('Expiry feed error'),
+    code: z.string().optional(),
+  }),
+  z.object({
+    event: z.literal('pong'),
+    t: z.number().optional(),
+  }),
+]);
+
+export type ExpiryFrame = z.infer<typeof expiryFrameSchema>;

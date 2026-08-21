@@ -293,7 +293,18 @@ export function useExpiries(symbol: string, exchange: string) {
  * nobody is watching — the store releases it after three idle minutes, which is
  * exactly what a hidden tab should trigger.
  */
-export function useExpiryState(symbol: string, exchange: string, expiry = '') {
+/**
+ * `enabled` is how the socket switches this off.
+ *
+ * The cockpit streams from `/ws/expiry` and keeps this poll as a FALLBACK for
+ * when it cannot connect — a proxy that drops upgrades, a backend mid-restart.
+ * Passing `false` once frames are arriving stops the page asking for state it
+ * is already being pushed, without the caller having to know that the two paths
+ * return the same shape.
+ */
+export function useExpiryState(
+  symbol: string, exchange: string, expiry = '', enabled = true,
+) {
   return useQuery({
     queryKey: keys.expiryState(symbol, exchange, expiry),
     queryFn: ({ signal }) =>
@@ -301,7 +312,7 @@ export function useExpiryState(symbol: string, exchange: string, expiry = '') {
         query: { symbol, exchange, ...(expiry ? { expiry } : {}) },
         signal,
       }),
-    enabled: Boolean(symbol),
+    enabled: enabled && Boolean(symbol),
     refetchInterval: 4_000,
     // A cold chain takes up to 20s to publish its first packet, and the route
     // answers immediately with `live: false` rather than waiting. Keeping the

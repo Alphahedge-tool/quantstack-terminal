@@ -136,7 +136,18 @@ interface Entry {
   lastBarMinute: number;
   lastTouched: number;
   timer: NodeJS.Timeout | null;
+  /**
+   * Sockets watching this contract.
+   *
+   * A live subscriber is a much better liveness signal than `lastTouched`: a
+   * poll proves a tab existed four seconds ago, an open socket proves it exists
+   * now. So a listener also pins the entry against the idle reaper, and the
+   * poll's timestamp only has to carry the polling clients.
+   */
+  listeners: Set<ExpiryListener>;
 }
+
+export type ExpiryListener = (state: ExpiryState) => void;
 
 const entries = new Map<string, Entry>();
 
@@ -340,6 +351,7 @@ async function open(exchange: string, symbol: string, expiry: string): Promise<E
     lastBarMinute: 0,
     lastTouched: Date.now(),
     timer: null,
+    listeners: new Set(),
   };
   entries.set(key, entry);
 
@@ -348,6 +360,7 @@ async function open(exchange: string, symbol: string, expiry: string): Promise<E
     (snap) => {
       try {
         sample(entry, snap);
+        publish(entry);
       } catch (e) {
         log.warn(`${key} sample failed: ${(e as Error).message}`);
       }
@@ -357,6 +370,7 @@ async function open(exchange: string, symbol: string, expiry: string): Promise<E
   // Idle release. The cockpit polls, so "nobody asked in three minutes" is the
   // only reliable signal that the tab is gone — there is no socket to close.
   entry.timer = setInterval(() => {
+    if (entry.listeners.size > 0) return;      // a socket is watching
     if (Date.now() - entry.lastTouched < IDLE_MS) return;
     log.info(`${key} idle — releasing the chain`);
     close(key);
@@ -396,7 +410,18 @@ export async function expiryState(
 ): Promise<ExpiryState> {
   const expiry = normalise(rawExpiry);
   const entry = await open(exchange.toUpperCase(), symbol.toUpperCase(), expiry);
+  return buildState(entry);
+}
 
+/**
+ * The cockpit state for an entry that is already open.
+ *
+ * Split out of `expiryState` so the socket and the poll answer with the same
+ * object built by the same code. Two builders would drift — and the drift would
+ * show up as the page changing shape when the socket dropped and the poll took
+ * over, which is the hardest kind of bug to see and the easiest to introduce.
+ */
+function buildState(entry: Entry): ExpiryState {
   const snap = entry.handle?.snapshot() ?? null;
   const last = entry.bars[entry.bars.length - 1] ?? null;
   const walls = wallsOf(entry.ladder);
@@ -430,6 +455,51 @@ export async function expiryState(
     ladder: entry.ladder,
     bars: entry.bars,
     recorded: entry.recorded,
+  };
+}
+
+/**
+ * Push the current state to every socket watching this contract.
+ *
+ * Called on each chain publish — about once a second. The state object is built
+ * ONCE and shared by every listener rather than per socket: it is read-only
+ * downstream, and two tabs on the same expiry are the normal case.
+ */
+function publish(entry: Entry): void {
+  if (!entry.listeners.size) return;
+  const state = buildState(entry);
+  for (const listener of entry.listeners) {
+    try { listener(state); } catch { /* one dead socket must not stop the rest */ }
+  }
+}
+
+/**
+ * Watch one contract over a socket.
+ *
+ * Resolves once the chain is acquired — which on a cold chain is the slow part,
+ * up to twenty seconds — and pushes on every publish thereafter. The returned
+ * function detaches; the entry itself is left to the idle reaper, so a tab that
+ * reconnects a second later finds the session still warm with its bars intact.
+ */
+export async function watchExpiry(
+  exchange: string, symbol: string, rawExpiry: string, listener: ExpiryListener,
+): Promise<{ state: ExpiryState; release: () => void }> {
+  const expiry = normalise(rawExpiry);
+  const entry = await open(exchange.toUpperCase(), symbol.toUpperCase(), expiry);
+  entry.listeners.add(listener);
+  entry.lastTouched = Date.now();
+
+  return {
+    // The caller gets the current state synchronously with the subscription, so
+    // a socket that connects between two publishes shows data immediately
+    // instead of a blank cockpit for up to a second.
+    state: buildState(entry),
+    release: () => {
+      entry.listeners.delete(listener);
+      // Restart the idle clock from the moment the last socket left, rather
+      // than from whenever the last poll happened to be.
+      entry.lastTouched = Date.now();
+    },
   };
 }
 

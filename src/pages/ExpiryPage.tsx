@@ -42,6 +42,7 @@ import { ExpiryLadder } from '@/components/expiry/ExpiryLadder';
 import { ExpiryTape } from '@/components/expiry/ExpiryTape';
 import { PressureGauge } from '@/components/expiry/PressureGauge';
 import { useExpiryReplay, useExpiryState } from '@/hooks/queries';
+import { useExpiryLive } from '@/hooks/useExpiryLive';
 import { decimal, expiryLabel, integer, signed, timeToExpiry } from '@/lib/format';
 import type { ExpiryReplay, ExpiryState, Regime } from '@/schemas/expiry';
 
@@ -170,14 +171,31 @@ export function ExpiryPage() {
    */
   const [date, setDate] = useState('');
 
-  const query = useExpiryState(contract.symbol, contract.exchange);
+  /*
+   * Live comes over the socket; the poll is the fallback under it.
+   *
+   * `/ws/expiry` pushes the whole state on the chain's clock, so the top line
+   * tracks the feed instead of trailing it by a poll interval. The poll stays
+   * wired but is disabled the moment frames arrive — if the socket cannot
+   * connect at all, the page behaves exactly as it did before.
+   *
+   * Both are off entirely in replay: a finished session cannot change, and
+   * holding a live chain open to look at last Tuesday would subscribe to a
+   * contract nobody is watching.
+   */
+  const live = useExpiryLive(contract.symbol, contract.exchange, '', !date);
+  const query = useExpiryState(
+    contract.symbol, contract.exchange, '', !date && !live.streaming,
+  );
   const replay = useExpiryReplay(contract.symbol, contract.exchange, date);
   const active = date ? replay : query;
 
   const state = useMemo<CockpitView | undefined>(() => {
     if (date) return replay.data ? viewOfReplay(replay.data) : undefined;
-    return query.data ? viewOfLive(query.data) : undefined;
-  }, [date, replay.data, query.data]);
+    // Pushed state wins over the polled copy: same shape, fresher instant.
+    const source = live.state ?? query.data;
+    return source ? viewOfLive(source) : undefined;
+  }, [date, replay.data, query.data, live.state]);
 
   const regime = REGIME[state?.regime ?? 'unknown'];
   const spot = state?.spot ?? null;
@@ -283,9 +301,17 @@ export function ExpiryPage() {
         </div>
       </section>
 
+      {/* The socket's error only matters while nothing is on screen — once a
+          frame has landed, a dropped connection is a reconnect in progress and
+          the last state is still the truth, so blanking the cockpit over it
+          would be worse than showing it slightly stale. */}
       {active.error ? (
         <div className="qs-container p-4">
           <ErrorState error={active.error} onRetry={() => active.refetch()} />
+        </div>
+      ) : !date && live.error && !state ? (
+        <div className="qs-container p-4">
+          <ErrorState error={new Error(live.error)} onRetry={() => active.refetch()} />
         </div>
       ) : null}
 

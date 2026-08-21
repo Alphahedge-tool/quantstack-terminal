@@ -109,6 +109,7 @@ import { attachLiveStraddleSocket } from './live/wsStraddle.js';
 import { attachLiveOrdersSocket } from './live/wsOrders.js';
 import { attachLiveQuotesSocket } from './live/wsQuotes.js';
 import { attachAssistantSocket } from './live/wsAssistant.js';
+import { attachExpirySocket } from './live/wsExpiry.js';
 
 
 const PORT = Number(process.env.QT_BACKEND_PORT || 3101);
@@ -167,4 +168,5 @@ attachLiveQuotesSocket(server);
 // client actually connects, so a backend nobody has a browser open against
 // holds no chain subscriptions. Persisted watches are restored on that first
 // connection, not at boot.
+attachExpirySocket(server);
 attachAssistantSocket(server);
