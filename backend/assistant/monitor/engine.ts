@@ -62,6 +62,59 @@ const ALERT_HISTORY = 200;
 /** Metrics sampled off every chain tick. */
 const SAMPLED: MetricName[] = ['oi', 'ltp', 'iv', 'volume', 'delta', 'gamma', 'vega', 'theta'];
 
+/**
+ * Which contracts get a series, and why not all of them.
+ *
+ * Sampling every quote on every metric is the obvious implementation and it is
+ * what this did: a NIFTY expiry publishes 488 contracts, times eight metrics is
+ * ~3,900 series, and each one is a ring of Float64Arrays. One watch on one
+ * strike was therefore allocating ~180 MB the first time its chain published —
+ * per expiry — and a terminal holding a few expiries open ran the process out
+ * of memory in minutes.
+ *
+ * Almost none of it was ever read. A watch reads its own contract (plus that
+ * contract's LTP, for the buildup reading); everything else existed so that an
+ * ad-hoc "how much has it moved in the last ten minutes" about some OTHER
+ * contract could be answered from history.
+ *
+ * So the sampled set is now: exactly what the live watches need, plus the
+ * liquid middle of the chain on the metrics people actually ask about. Strikes
+ * outside the band still answer live questions ("what is the OI on the 26000
+ * call") from the snapshot — it is only their *history* that is no longer kept,
+ * and a question about the history of a far wing now says it has not been
+ * watching that long, which is the same answer it gave before the chain was
+ * subscribed.
+ */
+const BAND_PCT = Number(process.env.QT_ASSISTANT_BAND_PCT || 5);
+const BAND_METRICS: readonly MetricName[] = ['oi', 'ltp', 'iv'];
+
+/**
+ * Series each active watch needs, keyed by chain — `strike|side|metric`.
+ *
+ * Rebuilt on every watch mutation rather than consulted through `allWatches()`
+ * per quote: `sample()` runs against several hundred contracts on every tick,
+ * and walking the watch list inside that loop would make it quadratic.
+ */
+const demand = new Map<string, Set<string>>();
+
+function rebuildDemand(): void {
+  demand.clear();
+  for (const w of allWatches()) {
+    if (w.paused) continue;
+    if (CHAIN_METRICS.includes(w.metric)) continue;   // spot/pcr: always sampled
+    if (w.strike == null || !w.side) continue;        // chain-wide: the band covers it
+
+    const key = chainKeyOf(w);
+    let set = demand.get(key);
+    if (!set) { set = new Set(); demand.set(key, set); }
+
+    set.add(`${w.strike}|${w.side}|${w.metric}`);
+    // buildupFor() reads the same contract's price alongside its OI, so an OI
+    // watch that did not also keep LTP would lose its long/short reading.
+    if (w.metric === 'oi') set.add(`${w.strike}|${w.side}|ltp`);
+  }
+}
+
 const series = new SeriesStore();
 const chains = new Map<string, ChainHandle>();
 const history: AlertEvent[] = [];
@@ -122,9 +175,19 @@ function pcrOf(snap: ChainSnapshot): number | undefined {
 function sample(snap: ChainSnapshot): void {
   const key = chainKeyOf(snap);
   const t = snap.updatedAt || Date.now();
+  const wanted = demand.get(key);
+
+  // The band is recomputed per tick rather than pinned at subscribe time, so it
+  // follows spot through the day instead of drifting off the money.
+  const lo = snap.spot != null ? snap.spot * (1 - BAND_PCT / 100) : null;
+  const hi = snap.spot != null ? snap.spot * (1 + BAND_PCT / 100) : null;
 
   for (const q of snap.quotes.values()) {
+    const inBand = lo != null && hi != null && q.strike >= lo && q.strike <= hi;
     for (const metric of SAMPLED) {
+      const needed = (inBand && BAND_METRICS.includes(metric))
+        || wanted?.has(`${q.strike}|${q.side}|${metric}`) === true;
+      if (!needed) continue;
       const v = metricOfQuote(q, metric);
       if (v == null) continue;
       series.push(SeriesStore.key(key, q.strike, q.side, metric), t, v);
@@ -154,6 +217,10 @@ export async function reconcileChains(session: NubraSession | null): Promise<voi
   if (session) sessionRef = session;
   const active = sessionRef;
   if (!active) return;
+
+  // Called after every watch mutation, which is exactly when the sampled set
+  // can have changed.
+  rebuildDemand();
 
   const wanted = requiredChains();
   const wantedKeys = new Set(wanted.map(chainKeyOf));
@@ -474,6 +541,7 @@ function evaluate(): void {
 
 export function startMonitor(): void {
   if (timer) return;
+  rebuildDemand();
   timer = setInterval(evaluate, EVAL_MS);
   timer.unref?.();
   log.info(`evaluating every ${EVAL_MS}ms`);

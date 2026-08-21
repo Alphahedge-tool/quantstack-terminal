@@ -17,10 +17,22 @@
  * The tail refresh is append-only, so a bar the feed later revises stays as
  * first cached. POST /api/straddle/cache-invalidate forces the full re-walk.
  *
- * Capacity: 50 entries max (~50 full-day straddle datasets in RAM).
- * Each entry is ~23,400 StraddlePoint objects ≈ 15–20 MB peak in V8.
- * 50 entries ≈ 750 MB RAM worst-case (acceptable for a terminal workstation).
- * In practice, users load 3–5 different sessions before reloading old ones.
+ * ── Capacity ──
+ *
+ * Bounded by estimated BYTES, not by entry count. It used to be "50 entries",
+ * on the estimate that a full day was 15–20 MB and fifty of them ~750 MB. That
+ * estimate was low by about 3.5×: measured against a live NIFTY session, one
+ * 22,484-point entry retains ~67 MB once GC settles (a 17-field object per
+ * point, plus the arrays holding them), so fifty of them is ~3.3 GB. Node's
+ * default old-space ceiling is ~2 GB, so a user flipping through enough
+ * expiries and dates to fill the cache killed the backend with
+ * "JavaScript heap out of memory" — reliably, and with no single request
+ * looking unreasonable.
+ *
+ * The budget below leaves room for the rest of the process (instrument masters,
+ * live chains, the straddle engine's own buffers) inside the default heap. Give
+ * the backend a bigger --max-old-space-size and QT_STRADDLE_CACHE_MB can go up
+ * with it.
  */
 
 import { LRUCache } from './lruCache.js';
@@ -42,9 +54,36 @@ export function isToday(dateISO: string): boolean {
   return dateISO === todayIST;
 }
 
+// ── Sizing ─────────────────────────────────────────────────────────────────
+
+/**
+ * Estimated retained bytes per StraddlePoint.
+ *
+ * Measured, not derived: a 22,484-point session moved settled heap by ~67 MB,
+ * which is ~3 KB per point. That is far above the ~150 bytes the 17 numeric
+ * fields would suggest, because each point is a separate V8 object and the
+ * arrays holding them carry pointer and allocation overhead of their own. The
+ * measurement is what the budget has to respect, so the measurement is what
+ * this uses.
+ */
+const BYTES_PER_POINT = 3_000;
+
+/** Floor for an entry with no points, so empty results still cost something. */
+const BYTES_BASE = 64 * 1024;
+
+/** Total budget for cached sessions. ~7 full days at the measured size. */
+const BUDGET_BYTES = Number(process.env.QT_STRADDLE_CACHE_MB || 480) * 1024 * 1024;
+
+function weighSession(data: unknown): number {
+  const points = (data as { points?: unknown[] } | null)?.points;
+  return BYTES_BASE + (Array.isArray(points) ? points.length * BYTES_PER_POINT : 0);
+}
+
 // ── Singleton ──────────────────────────────────────────────────────────────
+// The entry cap stays as a second bound so a pathological run of tiny results
+// cannot grow the map without limit; the byte budget is what normally binds.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const cache = new LRUCache<any>(50);
+const cache = new LRUCache<any>(50, { maxBytes: BUDGET_BYTES, weigh: weighSession });
 
 /**
  * Build the canonical cache key.
@@ -88,8 +127,10 @@ export function invalidate(key: string): void {
 /** Current cache stats — exposed via /api/straddle/cache-status. */
 export function cacheStatus() {
   return {
-    capacity: 50,
-    size:     cache.size,
-    entries:  cache.entries(),
+    capacity:   50,
+    budgetMB:   Math.round(BUDGET_BYTES / 1024 / 1024),
+    usedMB:     Math.round(cache.bytes / 1024 / 1024),
+    size:       cache.size,
+    entries:    cache.entries(),
   };
 }

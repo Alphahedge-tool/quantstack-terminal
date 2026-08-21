@@ -25,17 +25,56 @@
 /** Samples per series. 3600 at 1/s is an hour — longer than any live window. */
 const DEFAULT_CAPACITY = Number(process.env.QT_ASSISTANT_SERIES_CAP || 3_600);
 
+/**
+ * Samples a series allocates before it has any.
+ *
+ * The ring used to allocate its full capacity on the first write, which meant
+ * one 56 KB pair of Float64Arrays per (contract, metric) the moment a chain
+ * published — 180 MB for a single NIFTY expiry, most of it holding an hour of
+ * room for series that were seconds old. Starting small and doubling costs one
+ * copy per doubling (twelve, total, to reach the cap) and keeps a young series
+ * proportional to what it actually holds.
+ */
+const INITIAL_CAPACITY = 128;
+
 export class MetricSeries {
-  private readonly ts:  Float64Array;
-  private readonly val: Float64Array;
-  private readonly cap: number;
+  private ts:  Float64Array;
+  private val: Float64Array;
+  /** Current allocation. Doubles on demand up to `maxCap`. */
+  private cap: number;
+  private readonly maxCap: number;
   private head = 0;    // next write slot
   private len  = 0;
 
   constructor(capacity = DEFAULT_CAPACITY) {
-    this.cap = capacity;
-    this.ts  = new Float64Array(capacity);
-    this.val = new Float64Array(capacity);
+    this.maxCap = Math.max(1, capacity);
+    this.cap    = Math.min(INITIAL_CAPACITY, this.maxCap);
+    this.ts     = new Float64Array(this.cap);
+    this.val    = new Float64Array(this.cap);
+  }
+
+  /**
+   * Double the ring, preserving logical order.
+   *
+   * The copy re-linearises: afterwards the samples sit at 0..len-1 with the
+   * write head just past them, which is the same layout a young ring already
+   * has, so `indexOf` needs no special case for a grown buffer.
+   */
+  private grow(): void {
+    const next = Math.min(this.cap * 2, this.maxCap);
+    if (next <= this.cap) return;
+
+    const ts  = new Float64Array(next);
+    const val = new Float64Array(next);
+    for (let i = 0; i < this.len; i++) {
+      const slot = this.indexOf(i);
+      ts[i]  = this.ts[slot];
+      val[i] = this.val[slot];
+    }
+    this.ts   = ts;
+    this.val  = val;
+    this.cap  = next;
+    this.head = this.len;
   }
 
   get size(): number { return this.len; }
@@ -72,6 +111,10 @@ export class MetricSeries {
   push(t: number, v: number): void {
     if (!Number.isFinite(t) || !Number.isFinite(v)) return;
     if (this.len && t <= this.newest) return;
+
+    // Full but not yet at its ceiling: take the copy now rather than start
+    // evicting samples the series has room to keep.
+    if (this.len === this.cap && this.cap < this.maxCap) this.grow();
 
     this.ts[this.head]  = t;
     this.val[this.head] = v;
