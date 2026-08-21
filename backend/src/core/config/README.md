@@ -1,0 +1,8 @@
+# src/core/config
+
+One place that reads and validates env, instead of process.env at point of use.
+
+## Status
+
+**Nothing exists for this yet.** No code in the current backend maps here.
+This directory marks a decision that has not been made, not a move that is pending.
